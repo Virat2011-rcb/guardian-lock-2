@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "keywords": [
+    { "value": "example explicit phrase", "category": "explicit", "language": "en", "fuzzy": false },
+    { "value": "उदाहरण वाक्य", "category": "explicit", "language": "hi", "fuzzy": false }
+  ]
+}

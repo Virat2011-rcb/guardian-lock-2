@@ -1,0 +1,13 @@
+{
+  "name": "guardian-lock-recovery-dashboard",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Guardian Lock recovery dashboard and cloud command relay",
+  "main": "guardian-server.js",
+  "scripts": {
+    "start": "node guardian-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

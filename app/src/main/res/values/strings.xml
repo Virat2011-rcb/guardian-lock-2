@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Guardian Lock</string>
+    <string name="admin_description">Provides the user-requested 45-day protection period and temporary browser suspension.</string>
+    <string name="accessibility_description">Locally checks browser search fields for explicit-content searches. No text, history, or screenshots leave this device.</string>
+</resources>

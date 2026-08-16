@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guardian Lock Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Guardian Lock</h1>
+      <p>Remote recovery and device protection dashboard</p>
+    </div>
+    <div class="top-actions">
+      <span id="connectionBadge" class="badge muted">Waiting for phone</span>
+      <button id="settingsButton" class="ghost">Settings</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid cards">
+      <article class="card">
+        <span class="label">Battery</span>
+        <strong id="batteryValue">--</strong>
+        <small id="chargingValue">Waiting for phone</small>
+      </article>
+      <article class="card">
+        <span class="label">Network</span>
+        <strong id="networkValue">--</strong>
+        <small id="syncValue">No sync yet</small>
+      </article>
+      <article class="card">
+        <span class="label">Lost Mode</span>
+        <strong id="lostModeValue">--</strong>
+        <small id="ownerValue">Device Owner unknown</small>
+      </article>
+      <article class="card">
+        <span class="label">Study Mode</span>
+        <strong id="studyModeValue">--</strong>
+        <small id="maintenanceValue">Maintenance unknown</small>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Recovery Commands</h2>
+        <span id="commandStatus" class="muted">Signed commands only</span>
+      </div>
+      <label for="lostMessage">Lost Mode Message</label>
+      <input id="lostMessage" value="This phone is protected by Guardian Lock. Please contact the owner.">
+      <div class="command-grid">
+        <button class="danger" data-command="lost_mode_on">Lost Mode On</button>
+        <button data-command="found_device">Found My Device</button>
+        <button data-command="lock">Lock Now</button>
+        <button class="danger" data-command="alarm_on">Siren On</button>
+        <button data-command="alarm_off">Siren Off</button>
+        <button data-command="flashlight_on">Flashlight On</button>
+        <button data-command="flashlight_off">Flashlight Off</button>
+        <button data-command="capture_front">Front Photo</button>
+        <button data-command="capture_rear">Rear Photo</button>
+        <button data-command="record_audio">Record Audio</button>
+        <button class="secondary" data-command="maintenance_on">Maintenance 10 Min</button>
+        <button data-command="status">Save Status</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Location</h2>
+        <span id="locationSummary" class="muted">No location yet</span>
+      </div>
+      <div class="location-grid">
+        <div><span class="label">Latitude</span><strong id="latValue">--</strong></div>
+        <div><span class="label">Longitude</span><strong id="lonValue">--</strong></div>
+        <div><span class="label">Accuracy</span><strong id="accuracyValue">--</strong></div>
+      </div>
+      <div class="button-row">
+        <a id="googleMapsButton" class="button disabled" target="_blank" rel="noreferrer">Google Maps</a>
+        <a id="osmButton" class="button disabled" target="_blank" rel="noreferrer">OpenStreetMap</a>
+        <button id="copyCoordinates">Copy Coordinates</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Live Location Tracking</h2>
+        <span id="liveLocationState" class="muted">Idle</span>
+      </div>
+      <p id="liveLocationFreshness" class="muted">Waiting for GPS timestamp</p>
+      <div class="button-row">
+        <button id="locateNow">Locate Now</button>
+        <button id="startLiveLocation" class="secondary">Start Live 3s</button>
+        <button id="stopLiveLocation" class="ghost">Stop Live</button>
+      </div>
+      <div id="locationHistory" class="location-history"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Filters</h2>
+        <button id="refreshNow" class="ghost">Refresh Now</button>
+      </div>
+      <div class="filters">
+        <select id="typeFilter">
+          <option value="all">All</option>
+          <option value="photos">Photos</option>
+          <option value="audio">Audio</option>
+          <option value="status">Status</option>
+        </select>
+        <input id="dateFilter" type="date">
+        <select id="sortFilter">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+        </select>
+      </div>
+    </section>
+
+    <section id="photoPanel" class="panel">
+      <div class="section-head">
+        <h2>Photo Gallery</h2>
+        <span id="photoCount" class="muted">No photos yet</span>
+      </div>
+      <div id="gallery" class="gallery"></div>
+      <button id="loadMorePhotos" class="ghost">Load More Photos</button>
+    </section>
+
+    <section id="audioPanel" class="panel">
+      <div class="section-head">
+        <h2>Audio Recordings</h2>
+        <span id="audioCount" class="muted">No audio yet</span>
+      </div>
+      <div id="audioList" class="audio-list"></div>
+      <button id="loadMoreAudio" class="ghost">Load More Audio</button>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Timeline</h2>
+        <span id="timelineCount" class="muted">Waiting</span>
+      </div>
+      <div id="timeline" class="timeline"></div>
+    </section>
+
+    <section class="grid cards">
+      <article class="card"><span class="label">Total Photos</span><strong id="totalPhotos">0</strong></article>
+      <article class="card"><span class="label">Audio Files</span><strong id="totalAudio">0</strong></article>
+      <article class="card"><span class="label">Storage Used</span><strong id="storageUsed">0 B</strong></article>
+      <article class="card"><span class="label">Recovery Events</span><strong id="recoveryEvents">0</strong></article>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Battery History</h2>
+        <span class="muted">Latest status uploads</span>
+      </div>
+      <div id="batteryHistory" class="battery-history"></div>
+    </section>
+
+    <section id="debugPanel" class="panel hidden">
+      <h2>Debug</h2>
+      <pre id="debugOutput">Debug mode disabled.</pre>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" class="settings">
+      <h2>Dashboard Settings</h2>
+      <label>Recovery Server URL<input id="serverUrl" placeholder="http://localhost:8787"></label>
+      <label>Phone Dashboard URL<input id="phoneUrl" placeholder="http://192.168.x.x:8765"></label>
+      <label>Recovery Token<input id="tokenInput" type="password"></label>
+      <label>Auto Refresh Interval (ms)<input id="refreshInterval" type="number" min="1000" step="500"></label>
+      <label class="check"><input id="darkMode" type="checkbox"> Dark Mode</label>
+      <label class="check"><input id="notificationsEnabled" type="checkbox"> Desktop Notifications</label>
+      <label class="check"><input id="debugMode" type="checkbox"> Debug Mode</label>
+      <div class="button-row">
+        <button id="generateKey" type="button">Generate Laptop Key</button>
+        <button id="saveSettings" value="default">Save</button>
+      </div>
+      <label>Public Key To Paste In Phone<textarea id="publicKey" readonly></textarea></label>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="js/dashboard.js"></script>
+</body>
+</html>

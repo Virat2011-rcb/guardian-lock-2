@@ -1,0 +1,31 @@
+# Android / Gradle
+.gradle/
+build/
+app/build/
+
+# Android Studio
+.idea/
+*.iml
+
+# Local machine configuration
+local.properties
+
+# Signing keys / signing metadata
+*.jks
+*.keystore
+*.idsig
+
+# APK/AAB build outputs
+*.apk
+*.aab
+
+# Local recovery data / commands
+dashboard/recover_uploads/
+dashboard/recover_commands/
+
+# Secrets
+.env
+.env.*
+
+# Provisioning payload
+guardian-lock-provisioning-payload.json
