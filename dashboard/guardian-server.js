@@ -6,8 +6,9 @@ const url = require("url");
 const port = Number(process.env.PORT || 8787);
 const token = process.env.GUARDIAN_TOKEN || "change-me-before-use";
 const root = __dirname;
-const uploads = path.join(root, "recover_uploads");
-const commandDir = path.join(root, "recover_commands");
+const dataRoot = process.env.GUARDIAN_DATA_DIR || path.join(root, "data");
+const uploads = path.join(dataRoot, "recover_uploads");
+const commandDir = path.join(dataRoot, "recover_commands");
 fs.mkdirSync(uploads, { recursive: true });
 fs.mkdirSync(commandDir, { recursive: true });
 
