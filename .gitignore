@@ -29,3 +29,6 @@ dashboard/recover_commands/
 
 # Provisioning payload
 guardian-lock-provisioning-payload.json
+
+# Runtime recovery data
+dashboard/data/
