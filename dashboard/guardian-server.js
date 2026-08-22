@@ -24,7 +24,8 @@ const MIME = {
   ".aac": "audio/aac",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
-};
+  ".apk": "application/vnd.android.package-archive",
+}
 
 function send(res, code, body, type = "application/json") {
   const text = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body, null, 2));
