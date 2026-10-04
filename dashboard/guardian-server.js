@@ -554,6 +554,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       serverTime: Date.now(),
       version: "2.1",
+      build: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "local",
       websocket: { enabled: true, phoneOnline: socketOpen(phoneSocket) }
     });
     if (parsed.pathname.startsWith("/api/") && !authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
