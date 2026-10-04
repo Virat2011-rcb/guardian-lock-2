@@ -1,4 +1,12 @@
 export function parseCoordinates(value) {
+  if (value && typeof value === "object" && Number.isFinite(Number(value.latitude)) && Number.isFinite(Number(value.longitude))) {
+    return {
+      lat: Number(value.latitude),
+      lon: Number(value.longitude),
+      accuracy: Number.isFinite(Number(value.accuracyMeters)) ? Number(value.accuracyMeters) : null,
+      sourceTime: Number(value.timestamp || 0) || null,
+    };
+  }
   if (!value || typeof value !== "string") return null;
   const match = value.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i);
   if (!match) return null;
@@ -10,6 +18,34 @@ export function parseCoordinates(value) {
     accuracy: accuracyMatch ? Number(accuracyMatch[1]) : null,
     sourceTime: timeMatch ? Number(timeMatch[1]) : null,
   };
+}
+
+let liveMap;
+let liveMarker;
+let liveAccuracy;
+let livePath;
+
+export function renderLiveLocation(data = {}) {
+  const latest = data.latest || null;
+  const path = Array.isArray(data.path) ? data.path : (latest ? [latest] : []);
+  const host = document.getElementById("liveMap");
+  if (!host || !latest || typeof L === "undefined") return;
+  if (!liveMap) {
+    liveMap = L.map(host, { zoomControl: true }).setView([latest.latitude, latest.longitude], 16);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(liveMap);
+    liveMarker = L.marker([latest.latitude, latest.longitude]).addTo(liveMap);
+    liveAccuracy = L.circle([latest.latitude, latest.longitude], { color: "#387257", fillColor: "#77a88b", fillOpacity: 0.2, radius: latest.accuracyMeters || 20 }).addTo(liveMap);
+    livePath = L.polyline([], { color: "#387257", weight: 4 }).addTo(liveMap);
+  }
+  const point = [latest.latitude, latest.longitude];
+  liveMarker.setLatLng(point).bindPopup(`Phone location<br>${new Date(latest.timestamp).toLocaleTimeString()}`);
+  liveAccuracy.setLatLng(point).setRadius(latest.accuracyMeters || 20);
+  livePath.setLatLngs(path.map(item => [item.latitude, item.longitude]));
+  const stale = Date.now() - Number(latest.timestamp || 0) > 30_000;
+  const state = document.getElementById("liveLocationState");
+  if (state) state.textContent = stale ? "LOCATION STALE" : "LIVE · ${latest.speedMps == null ? "speed unavailable" : `${(latest.speedMps * 3.6).toFixed(1)} km/h`}";
+  const freshness = document.getElementById("liveLocationFreshness");
+  if (freshness) freshness.textContent = `${stale ? "Last known location" : "Last update"}: ${new Date(latest.timestamp).toLocaleString()} · Accuracy ${latest.accuracyMeters == null ? "--" : `${latest.accuracyMeters.toFixed(0)} m`}`;
 }
 
 export function renderLocation(raw) {

@@ -2,6 +2,8 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
+const crypto = require("crypto");
+const { WebSocketServer } = require("ws");
 
 const port = Number(process.env.PORT || 8787);
 const token = process.env.GUARDIAN_TOKEN || "change-me-before-use";
@@ -15,6 +17,86 @@ fs.mkdirSync(uploads, { recursive: true });
 fs.mkdirSync(commandDir, { recursive: true });
 fs.mkdirSync(pairingDir, { recursive: true });
 fs.mkdirSync(eventDir, { recursive: true });
+
+// WebSocket is an acceleration layer only. The signed HTTP queue remains the
+// source of truth so an offline phone can reconnect without losing commands.
+let phoneSocket = null;
+const dashboardSockets = new Set();
+const watchSockets = new Set();
+const wsTickets = new Map();
+const liveLocationHistory = [];
+
+function issueWebSocketTicket() {
+  const now = Date.now();
+  for (const [ticket, expiresAt] of wsTickets) if (expiresAt <= now) wsTickets.delete(ticket);
+  const ticket = crypto.randomBytes(24).toString("base64url");
+  wsTickets.set(ticket, now + 30_000);
+  return ticket;
+}
+
+function socketOpen(socket) {
+  return Boolean(socket && socket.readyState === 1);
+}
+
+function sendSocket(socket, payload) {
+  if (!socketOpen(socket)) return false;
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function broadcastSocket(payload, includePhone = false) {
+  for (const socket of dashboardSockets) sendSocket(socket, payload);
+  for (const socket of watchSockets) sendSocket(socket, payload);
+  if (includePhone) sendSocket(phoneSocket, payload);
+}
+
+function pushCommandToPhone(id, command) {
+  if (!socketOpen(phoneSocket)) return false;
+  return sendSocket(phoneSocket, {
+    type: "command",
+    id,
+    command,
+    serverReceivedAt: Date.now(),
+  });
+}
+
+function queuedCommandEnvelope(item) {
+  try {
+    const payload = JSON.parse(fs.readFileSync(item.file, "utf8"));
+    return { type: "command", id: payload.id, command: payload.command, serverReceivedAt: payload.createdAt };
+  } catch {
+    return null;
+  }
+}
+
+function acceptLiveLocation(value, source = "phone") {
+  const location = value && typeof value === "object" ? value : {};
+  const latitude = Number(location.latitude);
+  const longitude = Number(location.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    throw new Error("invalid_location");
+  }
+  const item = {
+    timestamp: Number(location.timestamp || Date.now()),
+    latitude,
+    longitude,
+    accuracyMeters: Number.isFinite(Number(location.accuracyMeters)) ? Number(location.accuracyMeters) : null,
+    speedMps: Number.isFinite(Number(location.speedMps)) ? Number(location.speedMps) : null,
+    bearing: Number.isFinite(Number(location.bearing)) ? Number(location.bearing) : null,
+    source: safeName(source),
+  };
+  const last = liveLocationHistory[liveLocationHistory.length - 1];
+  if (!last || last.timestamp !== item.timestamp || last.latitude !== item.latitude || last.longitude !== item.longitude) {
+    liveLocationHistory.push(item);
+    while (liveLocationHistory.length > 240) liveLocationHistory.shift();
+    broadcastSocket({ type: "location_update", location: item });
+  }
+  return item;
+}
 
 const MIME = {
   ".html": "text/html",
@@ -87,7 +169,11 @@ function queueCommand(body) {
     if (command[key] === undefined || command[key] === null) throw new Error(`missing_${key}`);
   }
   const id = `cmd_${Date.now()}_${safeName(command.command)}_${safeName(command.nonce).slice(0, 18)}.json`;
-  fs.writeFileSync(path.join(commandDir, id), JSON.stringify({ id, command, createdAt: Date.now() }, null, 2));
+  const createdAt = Date.now();
+  fs.writeFileSync(path.join(commandDir, id), JSON.stringify({ id, command, createdAt }, null, 2));
+  // Push after durable queueing. A failed push is harmless; HTTP polling will
+  // deliver the same signed envelope later.
+  pushCommandToPhone(id, command);
   return id;
 }
 
@@ -418,6 +504,13 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, event });
     }
 
+    if (req.method === "POST" && parsed.pathname === "/recover/live-location") {
+      if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
+      const body = await collect(req, 16 * 1024);
+      const location = acceptLiveLocation(JSON.parse(body.toString("utf8")), "phone-http");
+      return send(res, 200, { ok: true, location });
+    }
+
     if (req.method === "GET" && parsed.pathname === "/recover/list") {
       if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
       return send(res, 200, { ok: true, files: allUploadFiles().sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map(item => item.name) });
@@ -445,8 +538,17 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, acked: ackCommand(id, result) });
     }
 
-    if (parsed.pathname === "/api/health") return send(res, 200, { ok: true, serverTime: Date.now(), version: "2.0" });
+    if (parsed.pathname === "/api/health") return send(res, 200, {
+      ok: true,
+      serverTime: Date.now(),
+      version: "2.1",
+      websocket: { enabled: true, phoneOnline: socketOpen(phoneSocket) }
+    });
     if (parsed.pathname.startsWith("/api/") && !authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
+
+    if (req.method === "GET" && parsed.pathname === "/api/ws-ticket") {
+      return send(res, 200, { ok: true, ticket: issueWebSocketTicket(), expiresInMs: 30_000 });
+    }
 
     if (req.method === "POST" && parsed.pathname === "/api/watch/pairing") {
       const body = await collect(req, 64 * 1024);
@@ -475,7 +577,10 @@ const server = http.createServer(async (req, res) => {
     if (parsed.pathname === "/api/status/latest") return send(res, 200, { ok: true, status: latestStatus() });
     if (parsed.pathname === "/api/location/latest") {
       const latest = latestStatus();
-      return send(res, 200, { ok: true, location: latest?.data?.location || latest?.data?.locationSummary || null, status: latest });
+      return send(res, 200, { ok: true, location: liveLocationHistory.at(-1) || latest?.data?.location || latest?.data?.locationSummary || null, status: latest });
+    }
+    if (parsed.pathname === "/api/location/live") {
+      return send(res, 200, { ok: true, active: liveLocationHistory.length > 0, latest: liveLocationHistory.at(-1) || null, path: liveLocationHistory.slice(-120) });
     }
     if (parsed.pathname === "/api/location/history") {
       const items = statusFiles()
@@ -494,6 +599,94 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     return send(res, 500, { ok: false, error: error.message || "server_error" });
   }
+});
+
+const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+
+function removeSocket(socket) {
+  dashboardSockets.delete(socket);
+  watchSockets.delete(socket);
+  if (phoneSocket === socket) {
+    phoneSocket = null;
+    broadcastSocket({ type: "phone_presence", online: false, at: Date.now() });
+  }
+}
+
+webSocketServer.on("connection", (socket, request, role) => {
+  socket.role = role;
+  if (role === "phone") {
+    if (phoneSocket && phoneSocket !== socket) {
+      try { phoneSocket.close(4001, "replaced"); } catch { /* best effort */ }
+    }
+    phoneSocket = socket;
+  } else if (role === "dashboard") {
+    dashboardSockets.add(socket);
+  } else if (role === "watch") {
+    watchSockets.add(socket);
+  }
+
+  sendSocket(socket, { type: "hello", role, transport: "websocket", serverTime: Date.now() });
+  if (role === "phone") {
+    sendSocket(socket, { type: "phone_presence", online: true, at: Date.now() });
+    for (const item of commandFiles().slice(0, 20)) {
+      const envelope = queuedCommandEnvelope(item);
+      if (envelope) sendSocket(socket, envelope);
+    }
+  }
+  if (role === "dashboard" || role === "watch") {
+    sendSocket(socket, { type: "phone_presence", online: socketOpen(phoneSocket), at: Date.now() });
+  }
+
+  socket.on("message", raw => {
+    let message;
+    try { message = JSON.parse(raw.toString("utf8")); } catch { return; }
+    if (message.type === "ping") return sendSocket(socket, { type: "pong", at: Date.now() });
+    if (message.type === "ack" && role === "phone") {
+      const id = safeName(message.id || "");
+      const result = message.result && typeof message.result === "object" ? message.result : {};
+      const acked = id ? ackCommand(id, result) : false;
+      const payload = { type: "command_ack", id, result, acked, executedAt: Date.now() };
+      broadcastSocket(payload);
+      return;
+    }
+    if (message.type === "event" && (role === "phone" || role === "watch")) {
+      try {
+        const event = message.event && typeof message.event === "object" ? message.event : message;
+        const saved = saveRecoveryEvent(Buffer.from(JSON.stringify({ ...event, source: event.source || role })));
+        broadcastSocket({ type: "event", event: saved });
+      } catch { /* malformed telemetry is ignored */ }
+      return;
+    }
+    if (message.type === "status" && (role === "phone" || role === "watch")) {
+      broadcastSocket({ type: "status", status: message.status || {}, receivedAt: Date.now() });
+    }
+    if (message.type === "location_update" && role === "phone") {
+      try { acceptLiveLocation(message.location, "phone-websocket"); } catch { /* reject malformed location */ }
+    }
+  });
+  socket.on("close", () => removeSocket(socket));
+  socket.on("error", () => removeSocket(socket));
+});
+
+server.on("upgrade", (request, socket, head) => {
+  const parsed = url.parse(request.url, true);
+  if (parsed.pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+  const role = String(parsed.query.role || "dashboard");
+  const suppliedToken = request.headers["x-guardian-token"] || parsed.query.token;
+  const suppliedTicket = String(parsed.query.ticket || "");
+  const ticketValid = suppliedTicket && wsTickets.get(suppliedTicket) > Date.now();
+  if ((!ticketValid && suppliedToken !== token) || !["phone", "dashboard", "watch"].includes(role)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  if (ticketValid) wsTickets.delete(suppliedTicket);
+  webSocketServer.handleUpgrade(request, socket, head, ws => {
+    webSocketServer.emit("connection", ws, request, role);
+  });
 });
 
 server.listen(port, () => {

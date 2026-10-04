@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guardian Lock Dashboard</title>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
   <header class="topbar">
@@ -92,9 +93,10 @@
       <p id="liveLocationFreshness" class="muted">Waiting for GPS timestamp</p>
       <div class="button-row">
         <button id="locateNow">Locate Now</button>
-        <button id="startLiveLocation" class="secondary">Start Live 3s</button>
-        <button id="stopLiveLocation" class="ghost">Stop Live</button>
+        <button id="startLiveLocation" class="secondary">Start Live Tracking</button>
+        <button id="stopLiveLocation" class="ghost">Stop Tracking</button>
       </div>
+      <div id="liveMap" class="live-map" aria-label="Live phone map"></div>
       <div id="locationHistory" class="location-history"></div>
     </section>
 
@@ -164,6 +166,7 @@
       <pre id="debugOutput">Debug mode disabled.</pre>
     </section>
   </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <dialog id="settingsDialog">
     <form method="dialog" class="settings">

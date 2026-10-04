@@ -1,7 +1,7 @@
 import { FriendlyError, api, generateLaptopKey, getPublicKey, signedCommand } from "./api.js";
 import { renderAudio } from "./audio.js";
 import { renderGallery } from "./gallery.js";
-import { copyCoordinates, renderLocation, renderLocationHistory } from "./maps.js";
+import { copyCoordinates, renderLiveLocation, renderLocation, renderLocationHistory } from "./maps.js";
 import { notifyIfNeeded, requestNotificationPermission } from "./notifications.js";
 import { saveSettings, state } from "./state.js";
 import { renderTimeline } from "./timeline.js";
@@ -11,6 +11,8 @@ let photoOffset = 0;
 let audioOffset = 0;
 let refreshHandle = null;
 let liveLocationHandle = null;
+let liveSocket = null;
+let liveSocketRetry = null;
 let hasSnapshot = false;
 let latestSnapshot = { photoCount: 0, audioCount: 0, offline: false, batteryCritical: false, lostMode: false };
 
@@ -23,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   resetAndRefresh();
   startAutoRefresh();
+  startLiveTransport();
 });
 
 function bindElements() {
@@ -85,11 +88,12 @@ async function resetAndRefresh() {
 async function refreshAll(resetMedia = false) {
   const debug = {};
   try {
-    const [health, latestStatus, latestLocation, stats, phone] = await Promise.allSettled([
+    const [health, latestStatus, latestLocation, stats, live, phone] = await Promise.allSettled([
       api.health(),
       api.latestStatus(),
       api.latestLocation(),
       api.stats(),
+      api.liveLocation(),
       fetchPhoneStatus()
     ]);
 
@@ -97,17 +101,20 @@ async function refreshAll(resetMedia = false) {
     const statusData = valueOrNull(latestStatus);
     const locationData = valueOrNull(latestLocation);
     const statsData = valueOrNull(stats);
+    const liveData = valueOrNull(live);
     const phoneData = valueOrNull(phone);
 
     debug.health = healthData;
     debug.status = statusData;
     debug.location = locationData;
     debug.stats = statsData;
+    debug.live = liveData;
     debug.phone = phoneData;
 
     renderConnection(healthData, phoneData);
     renderStatus(statusData?.status?.data, statusData?.status?.timestamp, phoneData);
     renderLocation(locationData?.location);
+    renderLiveLocation(liveData);
     await refreshLocationHistory();
     renderStats(statsData?.stats || statsData);
     renderDebug(debug);
@@ -224,16 +231,16 @@ async function locateNow() {
 }
 
 function startLiveLocation() {
-  stopLiveLocation();
-  els.liveLocationState.textContent = "Live every 3 seconds";
-  locateNow();
-  liveLocationHandle = setInterval(() => locateNow(), 3000);
+  stopLiveLocation(false);
+  els.liveLocationState.textContent = "Starting…";
+  runCommand("live_tracking_start");
 }
 
-function stopLiveLocation() {
+function stopLiveLocation(sendCommand = true) {
   if (liveLocationHandle) clearInterval(liveLocationHandle);
   liveLocationHandle = null;
   if (els.liveLocationState) els.liveLocationState.textContent = "Idle";
+  if (sendCommand) runCommand("live_tracking_stop");
 }
 
 async function refreshLocationHistory() {
@@ -263,6 +270,7 @@ function saveSettingsFromUi() {
   saveSettings();
   applyTheme();
   startAutoRefresh();
+  startLiveTransport();
   toast("Dashboard settings saved.");
 }
 
@@ -284,6 +292,53 @@ function applyTheme() {
 function startAutoRefresh() {
   if (refreshHandle) clearInterval(refreshHandle);
   refreshHandle = setInterval(() => refreshAll(false), state.settings.refreshInterval);
+}
+
+function startLiveTransport() {
+  if (liveSocketRetry) clearTimeout(liveSocketRetry);
+  if (liveSocket) {
+    try { liveSocket.close(); } catch { /* best effort */ }
+    liveSocket = null;
+  }
+  const base = state.settings.serverUrl.replace(/\/$/, "");
+  if (!state.settings.token || !/^https?:\/\//i.test(base)) return;
+  const wsBase = base.replace(/^http/i, "ws");
+  api.wsTicket().then(ticketData => {
+    if (!ticketData?.ticket) throw new Error("No WebSocket ticket");
+    const endpoint = `${wsBase}/ws?role=dashboard&ticket=${encodeURIComponent(ticketData.ticket)}`;
+    liveSocket = new WebSocket(endpoint);
+    liveSocket.addEventListener("open", () => {
+      els.connectionBadge.textContent = "Recovery server online · live";
+      els.connectionBadge.className = "badge good";
+    });
+    liveSocket.addEventListener("message", event => {
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (message.type === "command_ack") {
+        els.commandStatus.textContent = message.result?.ok ? "Command applied on phone" : `Command failed: ${message.result?.error || "unknown error"}`;
+        refreshAll(false);
+      } else if (message.type === "phone_presence") {
+        els.commandStatus.textContent = message.online ? "Phone connected · push transport active" : "Phone offline · HTTP queue active";
+        renderConnection({ ok: true }, message.online ? { online: true } : null);
+      } else if (message.type === "location_update") {
+        renderLiveLocation({ latest: message.location, path: [message.location] });
+        refreshLocationHistory();
+      } else if (message.type === "event" || message.type === "status") {
+        // Push updates refresh the affected cards and timeline; the existing
+        // HTTP poll remains as a recovery path for missed browser messages.
+        refreshAll(false);
+      }
+    });
+    liveSocket.addEventListener("close", () => {
+      liveSocket = null;
+      liveSocketRetry = setTimeout(startLiveTransport, Math.max(3000, state.settings.refreshInterval));
+    });
+    liveSocket.addEventListener("error", () => {
+      try { liveSocket.close(); } catch { /* best effort */ }
+    });
+  }).catch(() => {
+    liveSocketRetry = setTimeout(startLiveTransport, Math.max(3000, state.settings.refreshInterval));
+  });
 }
 
 function notifyChanges(next) {

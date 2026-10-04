@@ -47,10 +47,13 @@ function cleanParams(params = {}) {
 
 export const api = {
   health: () => request("/api/health"),
+  wsTicket: () => request("/api/ws-ticket"),
 
   latestStatus: () => request("/api/status/latest"),
 
   latestLocation: () => request("/api/location/latest"),
+
+  liveLocation: () => request("/api/location/live"),
 
   locationHistory: params =>
     request(`/api/location/history?${new URLSearchParams(cleanParams(params))}`),
