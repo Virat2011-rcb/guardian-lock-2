@@ -41,8 +41,7 @@ class StudyModeManager(private val context: Context) {
             if (store.studyModeSessionId != 0L) finish(completed = true)
             return
         }
-        applyStudyPolicies()
-        suspendNonAllowedApps(store.studyAllowedPackages, true)
+        reconcileRestrictedApps()
     }
 
     fun handleBlockedLaunch(packageName: String): Boolean {
@@ -85,9 +84,24 @@ class StudyModeManager(private val context: Context) {
         val packages = whitelist.launchableThirdPartyPackages().map { it.packageName }
             .filterNot { it in allowed || isEssentialPackage(it) || it == context.packageName }
         packages.chunked(50).forEach { chunk ->
-            runCatching { policy.setPackagesSuspended(admin, chunk.toTypedArray(), suspend) }
-                .onFailure { audit.logTamper("study_policy_failure", it.javaClass.simpleName) }
+            runCatching {
+                val failed = policy.setPackagesSuspended(admin, chunk.toTypedArray(), suspend).toSet()
+                failed.forEach { audit.logTamper("package_suspension_failed", "$it study=$suspend") }
+                chunk.filter { it !in failed }.forEach { pkg ->
+                    if (policy.isPackageSuspended(admin, pkg) != suspend) {
+                        audit.logTamper("package_suspension_failed", "$pkg expected=$suspend")
+                    }
+                }
+            }.onFailure { audit.logTamper("package_suspension_failed", it.javaClass.simpleName) }
         }
+    }
+
+    /** Single Study Mode enforcement entry point used for lifecycle repair. */
+    fun reconcileRestrictedApps() {
+        if (!store.studyModeActive) return
+        applyStudyPolicies()
+        suspendNonAllowedApps(store.studyAllowedPackages, true)
+        audit.logTamper("study_mode_reconciled", "Restricted packages reconciled")
     }
 
     private fun unsuspendStudyTargets() = suspendNonAllowedApps(emptySet(), false)

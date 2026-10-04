@@ -1,0 +1,7 @@
+{
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.morningsearch.guard/.GuardianDeviceAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://github.com/Virat2011-rcb/guardian-lock-2/releases/download/v2.1.0/guardian-lock-release-aligned.apk",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "sygn4sozfw4elQKgqdbp2WrHU-8jDcLxvAaP8BGKVK8",
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": false,
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true
+}

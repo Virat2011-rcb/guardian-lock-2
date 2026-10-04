@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "GuardianLock"
 include(":app")
+include(":wear")

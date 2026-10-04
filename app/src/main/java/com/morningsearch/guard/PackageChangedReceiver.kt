@@ -12,5 +12,6 @@ class PackageChangedReceiver : BroadcastReceiver() {
             LockManager(context).suspendPackageIfDeviceOwner(packageName)
         }
         EnforcementService.start(context, EnforcementService.ACTION_RECONCILE)
+        AppLimitManager(context).reconcilePolicy()
     }
 }

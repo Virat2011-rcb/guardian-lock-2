@@ -20,5 +20,6 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
         EnforcementService.start(context, EnforcementService.ACTION_RECONCILE)
+        AppLimitManager(context).reconcilePolicy()
     }
 }

@@ -29,11 +29,19 @@ class EnforcementService : Service() {
         override fun run() {
             LockManager(this@EnforcementService).reconcile()
             GuardianRecoverManager(this@EnforcementService).reconcile()
+            LiveLocationService.reconcile(this@EnforcementService)
             TimeIntegrityMonitor(this@EnforcementService).checkAndCheckpoint()
             RecoverUploadManager(this@EnforcementService).pollRemoteCommandsAsync()
             inspectRequiredState()
             saveHeartbeat()
             handler.postDelayed(this, CHECK_INTERVAL_MS)
+        }
+    }
+    private val appLimitTick = object : Runnable {
+        override fun run() {
+            AppLimitManager(this@EnforcementService).tick()
+            UrgeManager(this@EnforcementService).tick()
+            handler.postDelayed(this, 1_000L)
         }
     }
 
@@ -45,11 +53,14 @@ class EnforcementService : Service() {
         createChannel()
         startForeground(NOTIFICATION_ID, notification("Protection monitor is active"))
         dashboardServer.start()
+        CloudWebSocketManager.get(this).start()
         scheduleSelfHeal()
         handler.post(check)
+        handler.post(appLimitTick)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        CloudWebSocketManager.get(this).start()
         if (intent?.action == ACTION_RECONCILE) LockManager(this).reconcile()
         scheduleSelfHeal()
         return START_STICKY
@@ -57,6 +68,8 @@ class EnforcementService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(check)
+        handler.removeCallbacks(appLimitTick)
+        CloudWebSocketManager.get(this).stop()
         dashboardServer.stop()
         scheduleSelfHeal()
         super.onDestroy()

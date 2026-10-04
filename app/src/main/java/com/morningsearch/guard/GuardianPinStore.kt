@@ -40,10 +40,6 @@ class GuardianPinStore(context: Context) {
         return MessageDigest.isEqual(expected, actual)
     }
 
-    fun clearAfterVerifiedRelease() {
-        preferences.edit().clear().commit()
-    }
-
     private fun derive(pin: CharArray, salt: ByteArray): ByteArray {
         val spec = PBEKeySpec(pin, salt, 150_000, 256)
         return try {

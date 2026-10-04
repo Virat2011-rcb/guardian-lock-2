@@ -23,15 +23,15 @@ class RecoverCommandVerifier(private val context: Context) {
     fun verify(command: SignedRecoverCommand): Boolean {
         if (command.command.isBlank() || command.nonce.length < 12) return false
         if (abs(System.currentTimeMillis() - command.issuedAt) > COMMAND_WINDOW_MS) return false
-        val keyBase64 = store.dashboardPublicKeyBase64
-        if (keyBase64.isBlank()) return false
-        val verified = runCatching {
+        val keys = listOf(store.dashboardPublicKeyBase64, store.watchPublicKeyBase64).filter { it.isNotBlank() }
+        if (keys.isEmpty()) return false
+        val verified = keys.any { keyBase64 -> runCatching {
             val keyBytes = Base64.decode(keyBase64, Base64.NO_WRAP)
             val publicKey = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(keyBytes))
             val signatureBytes = Base64.decode(command.signatureBase64, Base64.NO_WRAP)
             verifyWithSignatureBytes(publicKey, command.canonicalMessage(), signatureBytes) ||
                 verifyWithSignatureBytes(publicKey, command.canonicalMessage(), rawP256ToDer(signatureBytes))
-        }.getOrDefault(false)
+        }.getOrDefault(false) }
         return verified && store.rememberRecoverCommandNonce(command.nonce)
     }
 

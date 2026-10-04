@@ -7,12 +7,16 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -30,8 +34,17 @@ class MainActivity : Activity() {
     private lateinit var analytics: TextView
     private lateinit var graph: WeeklyProgressView
     private lateinit var setPinButton: Button
+    private lateinit var urgeButton: Button
+    private var localDashboardText: TextView? = null
     private var keywordImportAuthorized = false
     private var renderedDeviceOwner = false
+    private val urgeTicker = Handler(Looper.getMainLooper())
+    private val urgeTick = object : Runnable {
+        override fun run() {
+            if (renderedDeviceOwner) refreshStatus()
+            urgeTicker.postDelayed(this, 1_000L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +84,14 @@ class MainActivity : Activity() {
         if (renderedDeviceOwner) {
             refreshStatus()
             loadAnalytics()
+            urgeTicker.post(urgeTick)
+            checkPendingWatchPairing()
         }
+    }
+
+    override fun onPause() {
+        urgeTicker.removeCallbacks(urgeTick)
+        super.onPause()
     }
 
     private fun buildDeviceOwnerBlocker(): ScrollView {
@@ -109,156 +129,161 @@ class MainActivity : Activity() {
         return ScrollView(this).apply { addView(content) }
     }
 
-    private fun buildScreen(): ScrollView {
-        val padding = (24 * resources.displayMetrics.density).toInt()
-        val content = LinearLayout(this).apply {
+    private fun buildScreen(): LinearLayout {
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(padding, padding * 2, padding, padding)
-            setBackgroundColor(Color.rgb(244, 241, 232))
+            setBackgroundColor(Color.rgb(246, 247, 244))
         }
-        content.addView(TextView(this).apply {
-            text = "Guardian Lock"
-            textSize = 30f
-            setTextColor(Color.rgb(27, 54, 42))
-        })
-        content.addView(TextView(this).apply {
-            text = "Private, on-device recovery protection for a ${GuardConfig.COMMITMENT_DAYS}-day commitment. No history, screenshots, or search text are uploaded."
-            textSize = 16f
-            setPadding(0, padding, 0, padding)
-        })
-        content.addView(TextView(this).apply {
-            text = "Guardian setup: give the phone to your mummy/guardian. They must set a secret 6–10 digit PIN privately and must not tell it to you until the commitment ends, unless there is a real safety emergency."
-            textSize = 15f
-            setPadding(0, 0, 0, padding)
-            setTextColor(Color.rgb(93, 74, 37))
-        })
-        status = TextView(this).apply { textSize = 16f }
-        content.addView(status)
-        analytics = TextView(this).apply { textSize = 17f }
-        content.addView(analytics)
-        graph = WeeklyProgressView(this)
-        content.addView(graph, matchWrap())
-        content.addView(actionButton("Guardian Recover: refresh status") {
-            requireGuardianAuth("Refresh recovery status") {
-                val snapshot = GuardianRecoverManager(this).refreshStatus()
-                status.append("\nRecover status: battery ${snapshot.batteryPercent}%, ${snapshot.networkSummary}, location ${snapshot.locationSummary}")
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Pair laptop dashboard") { showDashboardPairDialog() }, matchWrap())
-        content.addView(actionButton("Guardian: set recovery upload server") {
-            requireGuardianAuth("Recovery upload server") { showRecoveryUploadDialog() }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: Lost Mode") {
-            requireGuardianAuth("Enable Lost Mode") { showLostModeDialog() }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: Found My Device") {
-            requireGuardianAuth("Found My Device") {
-                showRecoverResult(GuardianRecoverManager(this).foundDevice())
-                refreshStatus()
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: lock now") {
-            requireGuardianAuth("Lock device") {
-                showRecoverResult(GuardianRecoverManager(this).lockDevice(customPinRequested = true))
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: start siren") {
-            requireGuardianAuth("Start siren") {
-                showRecoverResult(GuardianRecoverManager(this).startAlarm())
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: stop siren") {
-            requireGuardianAuth("Stop siren") {
-                showRecoverResult(GuardianRecoverManager(this).stopAlarm())
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: flashlight blink") {
-            requireGuardianAuth("Flashlight blink") {
-                showRecoverResult(GuardianRecoverManager(this).startFlashlight())
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: stop flashlight") {
-            requireGuardianAuth("Stop flashlight") {
-                showRecoverResult(GuardianRecoverManager(this).stopFlashlight())
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: front camera photo") {
-            requireGuardianAuth("Front camera photo") {
-                showRecoverResult(GuardianRecoverManager(this).requestCapture("capture_front"))
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: rear camera photo") {
-            requireGuardianAuth("Rear camera photo") {
-                showRecoverResult(GuardianRecoverManager(this).requestCapture("capture_rear"))
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian Recover: record audio") {
-            requireGuardianAuth("Record audio") {
-                showRecoverResult(GuardianRecoverManager(this).requestCapture("record_audio"))
-                loadAnalytics()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Start Study Mode") { showStudyModeDialog() }, matchWrap())
-        setPinButton = actionButton("Set guardian PIN") { showSetGuardianPinDialog() }
-        content.addView(setPinButton, matchWrap())
-        content.addView(actionButton("Show guardian instructions") { showGuardianInstructions() }, matchWrap())
-        content.addView(actionButton("Enable search detection") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }, matchWrap())
-        content.addView(actionButton("Guardian: add a personal commitment reason") {
-            requireGuardianAuth("Add commitment reason") { showReasonDialog() }
-        }, matchWrap())
-        content.addView(actionButton("Guardian: choose entertainment apps") {
-            requireGuardianAuth("Change protected entertainment apps") { showEntertainmentSelection() }
-        }, matchWrap())
-        content.addView(actionButton("Guardian: import local keyword pack") {
-            requireGuardianAuth("Import keyword database") {
-                keywordImportAuthorized = true
-                startActivityForResult(
-                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "application/json"
-                    },
-                    REQUEST_KEYWORD_PACK
-                )
-            }
-        }, matchWrap())
-        content.addView(actionButton("Poco/MIUI: allow background operation") { openMiuiAutostart() }, matchWrap())
-        content.addView(actionButton("Allow unrestricted battery use") {
-            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-        }, matchWrap())
-        content.addView(actionButton("Guardian: maintenance mode (10 min)") {
-            requireGuardianAuth("Maintenance Mode") { authorized ->
-                if (LockManager(this).beginMaintenanceMode(authorized)) {
-                    status.append("\nMaintenance Mode started for 10 minutes. Developer Options are temporarily allowed.")
-                } else {
-                    status.append("\nMaintenance Mode failed: Device Owner is not active.")
-                }
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(actionButton("Guardian: emergency release") {
-            requireGuardianAuth("Release Device Owner protection") { authorized ->
-                if (!LockManager(this).releaseProtection(authorized)) status.append("\nRelease failed: Device Owner is not active.")
-                refreshStatus()
-            }
-        }, matchWrap())
-        content.addView(TextView(this).apply {
-            text = "Emergency calling, Settings, and essential apps remain available. Recovery, therapy, and medical-help searches are allowed. No app can make a phone impossible to reset forever; Device Owner mode gives the strongest normal protection."
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding * 2, padding, padding)
+            setBackgroundColor(Color.rgb(27, 54, 42))
+        }
+        toolbar.addView(TextView(this).apply { text = "Guardian Lock"; textSize = 28f; setTextColor(Color.WHITE) })
+        toolbar.addView(TextView(this).apply { text = "Private protection dashboard"; textSize = 14f; setTextColor(Color.rgb(202, 225, 211)) })
+        root.addView(toolbar)
+        val pages = FrameLayout(this)
+        root.addView(pages, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val home = buildHomePage(padding)
+        val protection = buildProtectionPage(padding)
+        val urge = buildUrgePage(padding)
+        val recover = buildRecoverPage(padding)
+        val more = buildMorePage(padding)
+        listOf(home, protection, urge, recover, more).forEach { pages.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        fun show(index: Int) { for (i in 0 until pages.childCount) pages.getChildAt(i).visibility = if (i == index) android.view.View.VISIBLE else android.view.View.GONE }
+        show(0)
+        val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(Color.WHITE); setPadding(4, 4, 4, 4) }
+        listOf("Home", "Protection", "Urge", "Recover", "More").forEachIndexed { index, label ->
+            nav.addView(Button(this).apply {
+                text = label
+                textSize = 12f
+                setTextColor(Color.rgb(27, 54, 42))
+                setBackgroundColor(Color.TRANSPARENT)
+                setOnClickListener { show(index) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        root.addView(nav)
+        return root
+    }
+
+    private fun scrollPage(padding: Int): ScrollView = ScrollView(this).apply {
+        isFillViewport = true
+        addView(LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(padding, padding, padding, padding) })
+    }
+
+    private fun pageContent(page: ScrollView): LinearLayout = page.getChildAt(0) as LinearLayout
+
+    private fun heading(text: String): TextView = TextView(this).apply {
+        this.text = text; textSize = 20f; setTextColor(Color.rgb(27, 54, 42)); setPadding(0, 8, 0, 10)
+    }
+
+    private fun card(title: String, description: String = ""): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(18, 14, 18, 14)
+        background = GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = 22f; setStroke(1, Color.rgb(222, 229, 223)) }
+        addView(TextView(this@MainActivity).apply { text = title; textSize = 17f; setTextColor(Color.rgb(27, 54, 42)) })
+        if (description.isNotBlank()) addView(TextView(this@MainActivity).apply { text = description; textSize = 13f; setTextColor(Color.rgb(84, 96, 88)); setPadding(0, 4, 0, 8) })
+    }
+
+    private fun addCard(content: LinearLayout, card: LinearLayout) { content.addView(card, matchWrap().apply { setMargins(0, 0, 0, 12) }) }
+
+    private fun buildHomePage(padding: Int): ScrollView {
+        val page = scrollPage(padding); val content = pageContent(page)
+        status = TextView(this).apply { textSize = 15f; setTextColor(Color.rgb(55, 67, 59)) }
+        val protection = card("PROTECTION", "Your local enforcement and connection status")
+        protection.addView(status)
+        addCard(content, protection)
+        val urgeCard = card("URGE", "Need a stronger shield? Manual URGE blocks browsers and applies the configured strong lock.")
+        urgeButton = actionButton("ACTIVATE URGE") { showUrgeDurationDialog() }
+        urgeButton.setTextColor(Color.WHITE); urgeButton.setBackgroundColor(Color.rgb(140, 45, 55)); urgeButton.minHeight = 54
+        urgeCard.addView(urgeButton, matchWrap()); addCard(content, urgeCard)
+        val today = card("TODAY", "Quick view of current restrictions")
+        today.addView(TextView(this).apply { text = "Study Mode and daily app limits are shown in Protection. CCTV and recovery controls are in Recover."; textSize = 14f })
+        addCard(content, today)
+        val prediction = card("PREDICTED URGE PROTECTION", "Automatic browser-only protection based on your recent pattern")
+        prediction.addView(TextView(this).apply { text = UrgePredictionManager(this@MainActivity).description(); textSize = 14f; setTextColor(Color.rgb(104, 78, 30)) })
+        addCard(content, prediction)
+        val quick = card("QUICK STATUS")
+        quick.addView(TextView(this).apply { text = "Hotspot: ${if (GuardStore(this@MainActivity).urgeActive) "RESTRICTED" else "AVAILABLE"}\nSettings: ${if (GuardStore(this@MainActivity).urgeActive) "RESTRICTED" else "AVAILABLE"}\nTransport: ${GuardStore(this@MainActivity).cloudTransportState.uppercase()}\nEmergency calling and essential safety apps remain available."; textSize = 14f })
+        addCard(content, quick)
+        return page
+    }
+
+    private fun buildProtectionPage(padding: Int): ScrollView {
+        val page = scrollPage(padding); val content = pageContent(page); content.addView(heading("Protection"))
+        val study = card("STUDY MODE", "Focus session with a frozen app allow-list")
+        study.addView(actionButton(if (GuardStore(this).studyModeActive) "Study Mode Active" else "Start Study Mode") { showStudyModeDialog() }, matchWrap()); addCard(content, study)
+        val limits = card("DAILY APP LIMITS", "Time limits are enforced locally and remain PIN-protected")
+        limits.addView(TextView(this).apply { text = AppLimitManager(this@MainActivity).summary().ifBlank { "No daily limits configured yet." }; textSize = 14f }); limits.addView(actionButton("Configure limits") { requireGuardianAuth("Daily app time limit") { showAppLimitSettings() } }, matchWrap()); addCard(content, limits)
+        val predicted = card("PREDICTED URGE PROTECTION", "AUTOMATIC · BROWSER ONLY")
+        predicted.addView(TextView(this).apply { text = UrgePredictionManager(this@MainActivity).description() + "\nHotspot: AVAILABLE · Settings: AVAILABLE"; textSize = 14f }); addCard(content, predicted)
+        val active = card("WHAT IS BLOCKED NOW?", "A transparent explanation of active restrictions")
+        active.addView(TextView(this).apply { text = "Browser protection follows current lock state. Manual URGE may restrict hotspot and Settings; predicted protection is browser-only."; textSize = 14f }); addCard(content, active)
+        val rules = card("GUARDIAN RULES", "Current rule ownership")
+        rules.addView(TextView(this).apply {
+            val store = GuardStore(this@MainActivity)
+            text = "Study Mode: ${if (store.studyModeActive) "ON" else "READY"}\nBrowser: ${if (store.isLocked || UrgePredictionManager(this@MainActivity).prediction()?.isActiveNow() == true) "BLOCKED" else "AVAILABLE"}\nHotspot: ${if (store.urgeActive) "RESTRICTED · Manual URGE" else "AVAILABLE · No Manual URGE"}\nSettings: ${if (store.urgeActive) "RESTRICTED · Manual URGE" else "AVAILABLE · No Manual URGE"}"
             textSize = 14f
-            setPadding(0, padding, 0, 0)
-        })
-        return ScrollView(this).apply { addView(content) }
+        }); addCard(content, rules)
+        return page
+    }
+
+    private fun buildUrgePage(padding: Int): ScrollView {
+        val page = scrollPage(padding); val content = pageContent(page); content.addView(heading("Urge"))
+        val shield = card("YOUR MANUAL PROTECTION SHIELD", "Use this when you need deliberate extra distance from browsing triggers.")
+        shield.addView(actionButton("ACTIVATE URGE") { showUrgeDurationDialog() }, matchWrap()); shield.addView(actionButton("View 7-day history") { showUrgeHistory() }, matchWrap()); addCard(content, shield)
+        analytics = TextView(this).apply { textSize = 15f; setTextColor(Color.rgb(55, 67, 59)) }
+        val insights = card("7-DAY INSIGHTS"); insights.addView(analytics); addCard(content, insights)
+        graph = WeeklyProgressView(this); val chart = card("PATTERN OVERVIEW", "Recent trigger activity, stored locally"); chart.addView(graph, matchWrap()); addCard(content, chart)
+        return page
+    }
+
+    private fun buildRecoverPage(padding: Int): ScrollView {
+        val page = scrollPage(padding); val content = pageContent(page); content.addView(heading("Recover"))
+        val device = card("DEVICE", "Guardian-authenticated recovery actions")
+        device.addView(actionButton("Locate Now") { requireGuardianAuth("Locate device") { val snapshot = GuardianRecoverManager(this).refreshStatus(); status.append("\nLocation: ${snapshot.locationSummary}"); loadAnalytics() } }, matchWrap())
+        device.addView(actionButton("Lock Now") { requireGuardianAuth("Lock device") { showRecoverResult(GuardianRecoverManager(this).lockDevice(true)); refreshStatus() } }, matchWrap())
+        device.addView(actionButton("Lost Mode") { requireGuardianAuth("Enable Lost Mode") { showLostModeDialog() } }, matchWrap()); addCard(content, device)
+        val alerts = card("ALERTS")
+        alerts.addView(actionButton("Start Siren") { requireGuardianAuth("Start siren") { showRecoverResult(GuardianRecoverManager(this).startAlarm()); refreshStatus() } }, matchWrap())
+        alerts.addView(actionButton("Stop Siren") { requireGuardianAuth("Stop siren") { showRecoverResult(GuardianRecoverManager(this).stopAlarm()); refreshStatus() } }, matchWrap())
+        alerts.addView(actionButton("Flashlight Blink") { requireGuardianAuth("Flashlight blink") { showRecoverResult(GuardianRecoverManager(this).startFlashlight()); refreshStatus() } }, matchWrap())
+        alerts.addView(actionButton("Stop Flashlight") { requireGuardianAuth("Stop flashlight") { showRecoverResult(GuardianRecoverManager(this).stopFlashlight()); refreshStatus() } }, matchWrap()); addCard(content, alerts)
+        val camera = card("CAMERA & CCTV", "Visible, user-consented recovery capture only")
+        camera.addView(actionButton("Front Camera Photo") { requireGuardianAuth("Front camera photo") { showRecoverResult(GuardianRecoverManager(this).requestCapture("capture_front")); loadAnalytics() } }, matchWrap())
+        camera.addView(actionButton("Rear Camera Photo") { requireGuardianAuth("Rear camera photo") { showRecoverResult(GuardianRecoverManager(this).requestCapture("capture_rear")); loadAnalytics() } }, matchWrap())
+        camera.addView(actionButton("Record Audio") { requireGuardianAuth("Record audio") { showRecoverResult(GuardianRecoverManager(this).requestCapture("record_audio")); loadAnalytics() } }, matchWrap())
+        camera.addView(actionButton(if (GuardStore(this).cctvMonitorActive) "CCTV Monitor Active" else "Start CCTV Monitor") { requireGuardianAuth("CCTV Monitor Mode") { showRecoverResult(GuardianRecoverManager(this).startCctvMonitor()); refreshStatus() } }, matchWrap()); addCard(content, camera)
+        return page
+    }
+
+    private fun buildMorePage(padding: Int): ScrollView {
+        val page = scrollPage(padding); val content = pageContent(page); content.addView(heading("More"))
+        val watch = card("GUARDIAN WATCH", "Nearby and cloud pairing status")
+        watch.addView(TextView(this).apply { text = if (GuardStore(this@MainActivity).watchPublicKeyBase64.isNotBlank()) "CONNECTED / PAIRED" else "NOT PAIRED"; textSize = 14f })
+        watch.addView(actionButton("Pair Watch") { requireGuardianAuth("Pair Guardian Watch") { showWatchPairDialog() } }, matchWrap()); watch.addView(actionButton("Pair Nearby Phone") { requireGuardianAuth("Arm nearby watch pairing") { GuardStore(this).armWatchPairingWindow(); status.append("\nNearby watch pairing armed for 2 minutes.") } }, matchWrap()); addCard(content, watch)
+        val cloud = card("CLOUD", "Remote recovery transport and uploads")
+        cloud.addView(TextView(this).apply { text = if (GuardStore(this@MainActivity).recoveryUploadUrl.isBlank()) "NOT CONFIGURED" else "Configured · ${GuardStore(this@MainActivity).cloudTransportState.uppercase()}"; textSize = 14f })
+        cloud.addView(actionButton("Recovery Server Settings") { requireGuardianAuth("Recovery upload server") { showRecoveryUploadDialog() } }, matchWrap()); addCard(content, cloud)
+        val nearby = card("NEARBY / LOCAL", "Direct phone dashboard for the same Wi-Fi or hotspot")
+        val localText = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(55, 67, 59)) }
+        localDashboardText = localText
+        nearby.addView(localText)
+        nearby.addView(actionButton("Refresh Local URL") { updateLocalDashboardText() }, matchWrap())
+        addCard(content, nearby)
+        val security = card("SECURITY", "Guardian-controlled configuration")
+        setPinButton = actionButton("Set Guardian PIN") { showSetGuardianPinDialog() }; security.addView(setPinButton, matchWrap())
+        security.addView(actionButton("Laptop Dashboard Pairing") { showDashboardPairDialog() }, matchWrap()); security.addView(actionButton("Guardian Instructions") { showGuardianInstructions() }, matchWrap()); addCard(content, security)
+        val setup = card("DEVICE SETUP", "Keep background enforcement reliable on Poco/MIUI")
+        setup.addView(actionButton("Enable Search Detection") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, matchWrap()); setup.addView(actionButton("Allow MIUI Autostart") { openMiuiAutostart() }, matchWrap()); setup.addView(actionButton("Allow Unrestricted Battery") { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }, matchWrap()); setup.addView(actionButton("Allow Background Location") { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchWrap()); addCard(content, setup)
+        val data = card("DATA", "Local-only protection data")
+        data.addView(actionButton("Add Personal Reason") { requireGuardianAuth("Add commitment reason") { showReasonDialog() } }, matchWrap()); data.addView(actionButton("Import Local Keyword Pack") { requireGuardianAuth("Import keyword database") { keywordImportAuthorized = true; startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/json" }, REQUEST_KEYWORD_PACK) } }, matchWrap()); addCard(content, data)
+        val diagnostics = card("DIAGNOSTICS", "Detailed events remain available without cluttering Home")
+        diagnostics.addView(TextView(this).apply { text = "Integrity and transport: ${GuardStore(this@MainActivity).tamperScore} security events recorded locally. Cloud transport is ${GuardStore(this@MainActivity).cloudTransportState}."; textSize = 14f }); diagnostics.addView(actionButton("Refresh Status") { requireGuardianAuth("Refresh recovery status") { GuardianRecoverManager(this).refreshStatus(); refreshStatus(); loadAnalytics() } }, matchWrap()); addCard(content, diagnostics)
+        val advanced = card("ADVANCED", "Maintenance is guardian-authenticated and temporary")
+        advanced.addView(actionButton("Maintenance Mode · 10 min") { requireGuardianAuth("Maintenance Mode") { authorized -> if (LockManager(this).beginMaintenanceMode(authorized)) status.append("\nMaintenance Mode started for 10 minutes.") else status.append("\nMaintenance Mode failed: Device Owner is not active."); refreshStatus() } }, matchWrap()); addCard(content, advanced)
+        return page
     }
 
     private fun refreshStatus() {
@@ -266,8 +291,10 @@ class MainActivity : Activity() {
         val store = GuardStore(this)
         val pinStore = GuardianPinStore(this)
         setPinButton.isEnabled = !pinStore.hasPin
-        val format = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
         val accessibility = isAccessibilityEnabled()
+        if (::urgeButton.isInitialized) {
+            urgeButton.text = if (store.urgeActive) "URGE ACTIVE — ${formatDuration(store.urgeRemainingMs())}" else "URGE"
+        }
         val integrityScore = listOf(
             manager.isDeviceOwner,
             pinStore.hasPin,
@@ -276,25 +303,118 @@ class MainActivity : Activity() {
             store.tamperScore < GuardConfig.TAMPER_LOCK_THRESHOLD
         ).count { it } * 20
         status.text = buildString {
-            append(if (manager.isDeviceOwner && pinStore.hasPin && accessibility) "Protection Active" else "Protection Incomplete")
-            append("\nIntegrity score: $integrityScore/100")
-            append(if (manager.isDeviceOwner) "\nDevice Owner: active" else "\nDevice Owner: not provisioned")
-            append(if (pinStore.hasPin) "\nGuardian PIN: set" else "\nGuardian PIN: not set")
-            append(if (accessibility) "\nAccessibility: active" else "\nAccessibility: not active")
-            append("\nTamper score: ${store.tamperScore}/${GuardConfig.TAMPER_LOCK_THRESHOLD}")
-            append(if (store.studyModeActive) "\nStudy Mode: active — ${formatDuration(store.effectiveStudyRemainingMs())} remaining" else "\nStudy Mode: ready")
-            append(if (store.lostModeActive) "\nLost Mode: active" else "\nLost Mode: off")
-            append(if (store.recoverAlarmActive) "\nRecover siren: active" else "\nRecover siren: off")
-            append(if (store.recoverFlashlightActive) "\nRecover flashlight: active" else "\nRecover flashlight: off")
-            append(if (store.dashboardPublicKeyBase64.isNotBlank()) "\nLaptop dashboard: paired" else "\nLaptop dashboard: not paired")
-            append("\nDashboard URL: http://${DashboardCommandServer.localIpAddress()}:${DashboardCommandServer.PORT}")
-            append(if (store.recoveryUploadUrl.isNotBlank()) "\nRecovery upload: configured" else "\nRecovery upload: not configured")
-            append(if (store.maintenanceModeActive) "\nMaintenance Mode: active — ${formatDuration(store.maintenanceRemainingMs())} remaining" else "\nMaintenance Mode: off")
-            if (store.isPending) append("\nUrge delay: active")
-            if (store.isLocked) append("\nLock ends: ${format.format(Date(store.lockUntilWall))}")
-            if (store.commitmentStartedAt > 0L) append("\nCommitment ends: ${format.format(Date(store.commitmentEndsAt))}")
-            append("\n")
+            append(if (manager.isDeviceOwner && pinStore.hasPin && accessibility) "● Protection Active" else "● Protection Incomplete")
+            append("\nDevice Owner      ${if (manager.isDeviceOwner) "ACTIVE" else "INCOMPLETE"}")
+            append("\nBrowser Protection ${if (accessibility) "ACTIVE" else "ATTENTION"}")
+            append("\nGuardian PIN      ${if (pinStore.hasPin) "SET" else "NOT SET"}")
+            append("\nCloud             ${store.cloudTransportState.uppercase()}")
+            append("\nWatch             ${if (store.watchPublicKeyBase64.isNotBlank()) "CONNECTED" else "NOT PAIRED"}")
+            append("\nIntegrity         $integrityScore / 100")
+            append("\nSecurity signals recorded locally: ${store.tamperScore}")
+            append("\n\nStudy Mode        ${if (store.studyModeActive) "ACTIVE · ${formatDuration(store.effectiveStudyRemainingMs())}" else "READY"}")
+            append("\nURGE              ${if (store.urgeActive) "ACTIVE · ${formatDuration(store.urgeRemainingMs())} remaining" else "READY"}")
+            append("\nCCTV              ${if (store.cctvMonitorActive) "ACTIVE" else "OFF"}")
+            append("\nLost Mode         ${if (store.lostModeActive) "ACTIVE" else "OFF"}")
         }
+        updateLocalDashboardText()
+    }
+
+    private fun updateLocalDashboardText() {
+        val ip = DashboardCommandServer.localIpAddress()
+        val valid = ip.isNotBlank() && ip != "0.0.0.0" && ip != "127.0.0.1"
+        localDashboardText?.text = if (valid) {
+            "Local URL\nhttp://$ip:${DashboardCommandServer.PORT}\nStatus\n● Available on local network"
+        } else {
+            "Local URL unavailable\nConnect the phone to Wi-Fi or a supported tethering network."
+        }
+    }
+
+    private fun showUrgeDurationDialog() {
+        val store = GuardStore(this)
+        if (store.urgeActive) {
+            AlertDialog.Builder(this).setTitle("URGE ACTIVE")
+                .setMessage("Browser access is blocked. Time remaining: ${formatDuration(store.urgeRemainingMs())}\nEnds: ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(store.urgeEndAt))}")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        // Close only the browser route while the user chooses the duration.
+        // Hotspot and Settings belong exclusively to a confirmed manual Urge.
+        LockManager(this).suspendUrgeTargets()
+        val options = arrayOf("1 Hour", "2 Hours", "3 Hours", "4 Hours", "Custom")
+        AlertDialog.Builder(this).setTitle("Urge for how many hours?")
+            .setItems(options) { _, which ->
+                if (which < 4) startUrge(which + 1) else showCustomUrgeDuration()
+            }.setNegativeButton("Cancel") { _, _ -> cancelUrgeSelection() }
+            .setOnCancelListener { cancelUrgeSelection() }.show()
+    }
+
+    private fun showCustomUrgeDuration() {
+        val input = EditText(this).apply { hint = "Hours (1–24)"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        AlertDialog.Builder(this).setTitle("Custom Urge duration").setView(input)
+            .setNegativeButton("Back") { _, _ -> cancelUrgeSelection() }.setPositiveButton("Start") { _, _ ->
+                startUrge(input.text.toString().toIntOrNull() ?: 0)
+            }.setOnCancelListener { cancelUrgeSelection() }.show()
+    }
+
+    private fun cancelUrgeSelection() {
+        if (!GuardStore(this).urgeActive) LockManager(this).reconcile()
+    }
+
+    private fun startUrge(hours: Int) {
+        if (hours !in 1..24) { status.append("\nChoose a duration from 1 to 24 hours."); cancelUrgeSelection(); return }
+        if (UrgeManager(this).start(hours)) {
+            status.append("\nURGE ACTIVE for $hours hour(s). Browser, Settings, and hotspot restrictions applied.")
+            refreshStatus()
+        } else {
+            status.append("\nUrge could not start. Device Owner must be active, or an Urge is already active.")
+            cancelUrgeSelection()
+        }
+    }
+
+    private fun showUrgeHistory() {
+        val entries = GuardStore(this).urgeHistory()
+        val formatter = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+        val message = if (entries.isEmpty()) "No urges recorded in the last 7 days." else entries.joinToString("\n\n") {
+            "${formatter.format(Date(it.startAt))}\n${if (it.exactMinutes) "${it.durationMinutes} minute(s)" else "${it.durationMinutes} hour(s)"}\nEnds ${formatter.format(Date(it.endAt))}\n${if (it.completed) "Completed" else "Active"}"
+        }
+        AlertDialog.Builder(this).setTitle("Urge History — last 7 days").setMessage(message).setPositiveButton("Close", null).show()
+    }
+
+    private fun showAppLimitSettings() {
+        val limitManager = AppLimitManager(this)
+        val choices = WhitelistManager(this).launchableThirdPartyPackages()
+        if (choices.isEmpty()) return
+        val selected = limitManager.configuredPackages().toMutableSet()
+        val labels = choices.map { it.label }.toTypedArray()
+        val checked = choices.map { it.packageName in selected }.toBooleanArray()
+        val minutes = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; hint = "Daily minutes (default 15)"; setText((limitManager.limitMillis() / 60_000L).toString()) }
+        AlertDialog.Builder(this).setTitle("Daily app time limit")
+            .setMessage("Select restricted apps. Usage is cumulative per day and enforcement uses Device Owner suspension.")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> if (isChecked) selected += choices[which].packageName else selected -= choices[which].packageName }
+            .setView(minutes)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                limitManager.setConfiguredPackages(selected)
+                limitManager.setLimitMinutes(minutes.text.toString().toIntOrNull() ?: 15)
+                refreshStatus()
+            }.show()
+    }
+
+    private fun checkPendingWatchPairing() {
+        val store = GuardStore(this)
+        val key = store.pendingWatchPublicKey
+        if (key.isBlank()) return
+        AlertDialog.Builder(this)
+            .setTitle("Nearby Guardian Watch pairing request")
+            .setMessage("A nearby watch is requesting pairing. Approve only if this is your Galaxy Watch.\n\nKey preview: ${key.take(18)}…")
+            .setNegativeButton("Reject") { _, _ -> store.clearPendingWatchPublicKey() }
+            .setPositiveButton("Approve") { _, _ ->
+                store.watchPublicKeyBase64 = key
+                store.clearPendingWatchPublicKey()
+                RecoverTimeline(this).record("watch_paired_nearby", "Guardian Watch paired through nearby phone transport")
+                status.append("\nGuardian Watch paired through nearby phone.")
+                refreshStatus()
+            }.show()
     }
 
     private fun loadAnalytics() {
@@ -390,10 +510,9 @@ class MainActivity : Activity() {
         1. Take the phone from the user before setting the PIN.
         2. Create a private 6–10 digit PIN that the user cannot guess.
         3. Do not tell the PIN to the user before ${GuardConfig.COMMITMENT_DAYS} days.
-        4. Use emergency release only for device-safety problems.
-        5. Keep emergency calling, health, school, work, banking, and family access available.
+        4. Keep emergency calling, health, school, work, banking, and family access available.
 
-        There is no in-app PIN recovery. If Device Owner mode is enabled, this PIN controls protected settings and release.
+        There is no in-app PIN recovery. If Device Owner mode is enabled, this PIN controls protected settings.
     """.trimIndent()
 
     @Deprecated("Uses the platform document picker result for Android 11 compatibility")
@@ -462,6 +581,41 @@ class MainActivity : Activity() {
                     status.append("\nPairing failed: public key is too short.")
                 }
                 refreshStatus()
+            }.show()
+    }
+
+    private fun showWatchPairDialog() {
+        val input = EditText(this).apply {
+            hint = "Enter 7-digit watch pairing code"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            maxLines = 1
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Pair Guardian Watch")
+            .setMessage("Open Guardian Watch → Settings / Pairing → generate the 7-digit code. Your watch never receives the guardian PIN.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Pair") { _, _ ->
+                val code = input.text.toString().filter { it.isDigit() }
+                if (!Regex("^\\d{7}$").matches(code)) {
+                    status.append("\nWatch pairing failed: enter exactly 7 digits.")
+                    return@setPositiveButton
+                }
+                status.append("\nPairing watch with code $code...")
+                Thread {
+                    val key = RecoverUploadManager(this).fetchWatchPublicKeyByCode(code)
+                    runOnUiThread {
+                        if (key != null) {
+                            GuardStore(this).watchPublicKeyBase64 = key
+                            RecoverTimeline(this).record("watch_paired", "Guardian Watch paired with 7-digit code")
+                            status.append("\nGuardian Watch paired.")
+                        } else {
+                            status.append("\nWatch pairing failed: code expired, server not configured, or token mismatch.")
+                        }
+                        refreshStatus()
+                    }
+                }
+                    .start()
             }.show()
     }
 
@@ -580,7 +734,15 @@ class MainActivity : Activity() {
         inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
     }
 
-    private fun actionButton(label: String, action: () -> Unit) = Button(this).apply { text = label; setOnClickListener { action() } }
+    private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 14f
+        isAllCaps = false
+        minHeight = (48 * resources.displayMetrics.density).toInt()
+        setTextColor(Color.rgb(27, 54, 42))
+        background = GradientDrawable().apply { setColor(Color.rgb(232, 240, 233)); cornerRadius = 16f }
+        setOnClickListener { action() }
+    }
     private fun matchWrap() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     private fun formatDuration(ms: Long): String {
         val minutes = ms / 60_000L

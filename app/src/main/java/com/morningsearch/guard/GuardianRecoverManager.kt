@@ -34,6 +34,14 @@ class GuardianRecoverManager(private val context: Context) {
             "alarm_off" -> stopAlarm()
             "flashlight_on" -> startFlashlight()
             "flashlight_off" -> stopFlashlight()
+            "cctv_on" -> startCctvMonitor(fromSignedCommand = true)
+            "cctv_off" -> stopCctvMonitor()
+            "live_tracking_start" -> startLiveTracking()
+            "live_tracking_stop" -> stopLiveTracking()
+            "urge_start" -> {
+                val minutes = command.payload.toIntOrNull() ?: return RecoverCommandResult.Failed("Invalid Urge duration")
+                if (UrgeManager(context).startMinutes(minutes)) RecoverCommandResult.Applied else RecoverCommandResult.Failed("Urge could not start")
+            }
             "maintenance_on" -> if (LockManager(context).beginMaintenanceMode(true)) {
                 RecoverCommandResult.Applied
             } else {
@@ -150,6 +158,45 @@ class GuardianRecoverManager(private val context: Context) {
                 .putExtra(RecoveryCaptureActivity.EXTRA_MODE, mode)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         )
+        return RecoverCommandResult.Applied
+    }
+
+    fun startCctvMonitor(fromSignedCommand: Boolean = false): RecoverCommandResult {
+        timeline.record(
+            "cctv_monitor_requested",
+            "Visible CCTV Monitor Mode requested${if (fromSignedCommand) " by signed command" else ""}"
+        )
+        RecoverUploadManager(context).uploadStatusAsync()
+        context.startActivity(
+            Intent(context, CctvMonitorActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        )
+        return RecoverCommandResult.Applied
+    }
+
+    fun stopCctvMonitor(): RecoverCommandResult {
+        store.setCctvMonitorActive(false)
+        timeline.record("cctv_monitor_stop_requested", "Visible CCTV Monitor Mode stop requested")
+        RecoverUploadManager(context).uploadEventAsync("cctv_monitor_stop_requested", "Visible CCTV Monitor Mode stop requested")
+        return RecoverCommandResult.Applied
+    }
+
+    fun startLiveTracking(): RecoverCommandResult {
+        if (!isDeviceOwner) return RecoverCommandResult.Failed("Device Owner is not active")
+        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) return RecoverCommandResult.Failed("Location permission is not granted")
+        store.setLiveTrackingActive(true)
+        timeline.record("live_tracking_started", "Owner-authorized live location session started")
+        LiveLocationService.start(context)
+        return RecoverCommandResult.Applied
+    }
+
+    fun stopLiveTracking(): RecoverCommandResult {
+        store.setLiveTrackingActive(false)
+        LiveLocationService.stop(context)
+        timeline.record("live_tracking_stopped", "Owner-authorized live location session stopped")
+        RecoverUploadManager(context).uploadEventAsync("live_tracking_stopped", "Live location session stopped")
         return RecoverCommandResult.Applied
     }
 

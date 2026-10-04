@@ -26,7 +26,19 @@ class SearchGuardAccessibilityService : AccessibilityService() {
         val packageName = event.packageName?.toString() ?: return
         val manager = LockManager(this)
 
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            AppLimitManager(this).onForegroundPackage(packageName)
+        }
+
         if (StudyModeManager(this).handleBlockedLaunch(packageName)) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            return
+        }
+
+        if (GuardStore(this).urgeActive &&
+            (packageName == "com.android.settings" || packageName == "com.miui.securitycenter")) {
+            TamperManager(this).record("urge_settings_blocked", "Settings access blocked during active Urge Lock", 5)
             performGlobalAction(GLOBAL_ACTION_HOME)
             return
         }

@@ -61,9 +61,12 @@ class LockManager(private val context: Context) {
     }
 
     fun reconcile() {
+        UrgeManager(context).reconcile()
+        val predictedBrowserProtection = UrgePredictionManager(context).reconcile()
         beginCommitmentIfNeeded()
         applyDebuggingPolicy()
         StudyModeManager(context).reconcile()
+        if (!store.studyModeActive) AppLimitManager(context).reconcilePolicy()
         if (store.isPending) {
             if (System.currentTimeMillis() >= store.pendingActivateAt) {
                 store.activatePendingLock()
@@ -71,10 +74,18 @@ class LockManager(private val context: Context) {
                 scheduleEvaluation(store.pendingActivateAt)
             }
         }
+        if (store.urgeActive) {
+            applyConnectivityRestrictions()
+            suspendUrgeTargets()
+        } else {
+            clearConnectivityRestrictions()
+        }
+        if (predictedBrowserProtection) suspendUrgeTargets()
         if (store.isLocked) {
             suspendLockTargets(true)
             scheduleEvaluation(System.currentTimeMillis() + store.effectiveRemainingMs())
-        } else if (!store.isPending) {
+        } else if (!store.isPending && !store.urgeActive && !predictedBrowserProtection && !store.studyModeActive) {
+            clearConnectivityRestrictions()
             unsuspendAllManagedTargets()
         }
         if (store.maintenanceModeActive) {
@@ -82,22 +93,9 @@ class LockManager(private val context: Context) {
         }
     }
 
-    fun releaseProtection(guardianAuthorized: Boolean): Boolean {
-        if (!guardianAuthorized || !isDeviceOwner) return false
-        unsuspendAllManagedTargets()
-        policy.setUserControlDisabledPackages(admin, emptyList())
-        policy.setUninstallBlocked(admin, context.packageName, false)
-        policy.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
-        policy.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_DATE_TIME)
-        policy.setAutoTimeRequired(admin, false)
-        policy.clearDeviceOwnerApp(context.packageName)
-        store.endProtection()
-        GuardianPinStore(context).clearAfterVerifiedRelease()
-        context.stopService(Intent(context, EnforcementService::class.java))
-        return true
-    }
-
     fun isBlockedPackage(packageName: String): Boolean {
+        if (store.urgeActive && BrowserRegistry(context).isBrowser(packageName)) return true
+        if (BrowserRegistry(context).isBrowser(packageName) && UrgePredictionManager(context).prediction()?.isActiveNow() == true) return true
         if (!store.isLocked && !store.isPending) return false
         if (BrowserRegistry(context).isBrowser(packageName)) return true
         return store.isLocked && store.lockIncludesEntertainment &&
@@ -143,6 +141,23 @@ class LockManager(private val context: Context) {
             }
             policy.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         }
+    }
+
+    /** Prevents the phone from providing an internet bypass during an active urge/lock window. */
+    fun applyConnectivityRestrictions() {
+        if (!isDeviceOwner) return
+        runCatching { policy.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_TETHERING) }
+        runCatching { policy.addUserRestriction(admin, UserManager.DISALLOW_USB_FILE_TRANSFER) }
+    }
+
+    fun clearConnectivityRestrictions() {
+        if (!isDeviceOwner) return
+        runCatching { policy.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_TETHERING) }
+        runCatching { policy.clearUserRestriction(admin, UserManager.DISALLOW_USB_FILE_TRANSFER) }
+    }
+
+    fun suspendUrgeTargets() {
+        if (isDeviceOwner) setSuspended(BrowserRegistry(context).installedBrowsers(), true)
     }
 
     private fun setSuspended(packages: Set<String>, suspended: Boolean) {

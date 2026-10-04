@@ -98,8 +98,11 @@ class DashboardCommandServer(private val context: Context) {
             .put("lostMode", store.lostModeActive)
             .put("siren", store.recoverAlarmActive)
             .put("flashlight", store.recoverFlashlightActive)
+            .put("cctvMonitor", store.cctvMonitorActive)
             .put("maintenanceMode", store.maintenanceModeActive)
             .put("maintenanceRemainingMs", store.maintenanceRemainingMs())
+            .put("cloudTransport", store.cloudTransportState)
+            .put("cloudTransportLastChange", store.cloudTransportLastChange)
             .put("battery", status.batteryPercent)
             .put("charging", status.charging)
             .put("network", status.networkSummary)
@@ -136,11 +139,21 @@ class DashboardCommandServer(private val context: Context) {
             return runCatching {
                 NetworkInterface.getNetworkInterfaces().toList()
                     .filter { it.isUp && !it.isLoopback }
+                    .sortedBy { networkInterfacePriority(it.name.orEmpty()) }
                     .flatMap { it.inetAddresses.toList() }
                     .filterIsInstance<Inet4Address>()
-                    .firstOrNull { !it.isLoopbackAddress }
+                    .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
                     ?.hostAddress ?: "0.0.0.0"
             }.getOrDefault("0.0.0.0")
+        }
+
+        private fun networkInterfacePriority(name: String): Int = when {
+            name.startsWith("wlan", ignoreCase = true) -> 0
+            name.startsWith("eth", ignoreCase = true) -> 1
+            name.startsWith("rndis", ignoreCase = true) || name.startsWith("usb", ignoreCase = true) -> 2
+            name.startsWith("ap", ignoreCase = true) -> 3
+            name.startsWith("rmnet", ignoreCase = true) || name.startsWith("tun", ignoreCase = true) -> 20
+            else -> 10
         }
     }
 }
