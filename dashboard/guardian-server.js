@@ -26,11 +26,11 @@ const watchSockets = new Set();
 const wsTickets = new Map();
 const liveLocationHistory = [];
 
-function issueWebSocketTicket() {
+function issueWebSocketTicket(role = "dashboard") {
   const now = Date.now();
-  for (const [ticket, expiresAt] of wsTickets) if (expiresAt <= now) wsTickets.delete(ticket);
+  for (const [ticket, record] of wsTickets) if (record.expiresAt <= now) wsTickets.delete(ticket);
   const ticket = crypto.randomBytes(24).toString("base64url");
-  wsTickets.set(ticket, now + 30_000);
+  wsTickets.set(ticket, { role, expiresAt: now + 30_000 });
   return ticket;
 }
 
@@ -54,20 +54,20 @@ function broadcastSocket(payload, includePhone = false) {
   if (includePhone) sendSocket(phoneSocket, payload);
 }
 
-function pushCommandToPhone(id, command) {
+function pushCommandToPhone(id, command, serverReceivedAt = Date.now()) {
   if (!socketOpen(phoneSocket)) return false;
   return sendSocket(phoneSocket, {
     type: "command",
     id,
     command,
-    serverReceivedAt: Date.now(),
+    serverReceivedAt,
   });
 }
 
 function queuedCommandEnvelope(item) {
   try {
     const payload = JSON.parse(fs.readFileSync(item.file, "utf8"));
-    return { type: "command", id: payload.id, command: payload.command, serverReceivedAt: payload.createdAt };
+    return { type: "command", id: payload.id, command: payload.command, serverReceivedAt: payload.serverReceivedAt || payload.createdAt };
   } catch {
     return null;
   }
@@ -170,11 +170,12 @@ function queueCommand(body) {
   }
   const id = `cmd_${Date.now()}_${safeName(command.command)}_${safeName(command.nonce).slice(0, 18)}.json`;
   const createdAt = Date.now();
-  fs.writeFileSync(path.join(commandDir, id), JSON.stringify({ id, command, createdAt }, null, 2));
+  const serverReceivedAt = createdAt;
+  fs.writeFileSync(path.join(commandDir, id), JSON.stringify({ id, command, createdAt, serverReceivedAt }, null, 2));
   // Push after durable queueing. A failed push is harmless; HTTP polling will
   // deliver the same signed envelope later.
-  pushCommandToPhone(id, command);
-  return id;
+  pushCommandToPhone(id, command, serverReceivedAt);
+  return { id, serverReceivedAt };
 }
 
 function ackCommand(id, result) {
@@ -183,11 +184,21 @@ function ackCommand(id, result) {
   if (!fs.existsSync(file)) return false;
   const ackFile = path.join(commandDir, safe.replace(/^cmd_/, "ack_"));
   const payload = JSON.parse(fs.readFileSync(file, "utf8"));
-  payload.ackedAt = Date.now();
+  const ackReceivedAt = Date.now();
+  payload.ackedAt = ackReceivedAt;
   payload.result = result || {};
+  payload.latency = {
+    commandCreatedAt: payload.createdAt || null,
+    serverReceivedAt: payload.serverReceivedAt || payload.createdAt || null,
+    phoneReceivedAt: result?.phoneReceivedAt || null,
+    executionStartedAt: result?.executionStartedAt || null,
+    executionFinishedAt: result?.executionFinishedAt || null,
+    ackSentAt: result?.ackSentAt || null,
+    dashboardReceivedAckAt: ackReceivedAt,
+  };
   fs.writeFileSync(ackFile, JSON.stringify(payload, null, 2));
   fs.unlinkSync(file);
-  return true;
+  return payload;
 }
 
 function cleanupExpiredPairings() {
@@ -535,7 +546,8 @@ const server = http.createServer(async (req, res) => {
       const body = await collect(req, 64 * 1024);
       const id = decodeURIComponent(parsed.pathname.replace("/recover/commands/", "").replace("/ack", ""));
       const result = body.length ? JSON.parse(body.toString("utf8")) : {};
-      return send(res, 200, { ok: true, acked: ackCommand(id, result) });
+      const ackRecord = ackCommand(id, result);
+      return send(res, 200, { ok: true, acked: Boolean(ackRecord), latency: ackRecord?.latency || null });
     }
 
     if (parsed.pathname === "/api/health") return send(res, 200, {
@@ -547,7 +559,8 @@ const server = http.createServer(async (req, res) => {
     if (parsed.pathname.startsWith("/api/") && !authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
 
     if (req.method === "GET" && parsed.pathname === "/api/ws-ticket") {
-      return send(res, 200, { ok: true, ticket: issueWebSocketTicket(), expiresInMs: 30_000 });
+      const role = ["phone", "dashboard", "watch"].includes(String(parsed.query.role || "")) ? String(parsed.query.role) : "dashboard";
+      return send(res, 200, { ok: true, role, ticket: issueWebSocketTicket(role), expiresInMs: 30_000 });
     }
 
     if (req.method === "POST" && parsed.pathname === "/api/watch/pairing") {
@@ -558,8 +571,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && parsed.pathname === "/api/commands") {
       const body = await collect(req, 64 * 1024);
-      const id = queueCommand(body);
-      return send(res, 200, { ok: true, queued: id });
+      const queued = queueCommand(body);
+      return send(res, 200, { ok: true, queued: queued.id, serverReceivedAt: queued.serverReceivedAt });
     }
 
     if (parsed.pathname === "/api/photos") {
@@ -641,11 +654,50 @@ webSocketServer.on("connection", (socket, request, role) => {
     let message;
     try { message = JSON.parse(raw.toString("utf8")); } catch { return; }
     if (message.type === "ping") return sendSocket(socket, { type: "pong", at: Date.now() });
+    if (message.type === "command" && role === "dashboard") {
+      try {
+        const command = message.command && typeof message.command === "object" ? message.command : null;
+        if (!command) throw new Error("missing_command");
+        const queued = queueCommand(Buffer.from(JSON.stringify(command)));
+        sendSocket(socket, {
+          type: "command_accepted",
+          requestId: safeName(message.requestId || "").slice(0, 120),
+          id: queued.id,
+          queued: true,
+          serverReceivedAt: queued.serverReceivedAt,
+        });
+      } catch (error) {
+        sendSocket(socket, {
+          type: "command_accepted",
+          requestId: safeName(message.requestId || "").slice(0, 120),
+          ok: false,
+          error: error.message || "command_queue_failed",
+        });
+      }
+      return;
+    }
     if (message.type === "ack" && role === "phone") {
       const id = safeName(message.id || "");
       const result = message.result && typeof message.result === "object" ? message.result : {};
-      const acked = id ? ackCommand(id, result) : false;
-      const payload = { type: "command_ack", id, result, acked, executedAt: Date.now() };
+      const ackRecord = id ? ackCommand(id, result) : false;
+      const acked = Boolean(ackRecord);
+      const dashboardReceivedAckAt = Date.now();
+      const payload = {
+        type: "command_ack",
+        id,
+        result,
+        acked,
+        executedAt: result.executionFinishedAt || dashboardReceivedAckAt,
+        dashboardReceivedAckAt,
+        latency: {
+          ...(ackRecord?.latency || {}),
+          phoneReceivedAt: result.phoneReceivedAt || null,
+          executionStartedAt: result.executionStartedAt || null,
+          executionFinishedAt: result.executionFinishedAt || null,
+          ackSentAt: result.ackSentAt || null,
+          dashboardReceivedAckAt,
+        },
+      };
       broadcastSocket(payload);
       return;
     }
@@ -677,7 +729,8 @@ server.on("upgrade", (request, socket, head) => {
   const role = String(parsed.query.role || "dashboard");
   const suppliedToken = request.headers["x-guardian-token"] || parsed.query.token;
   const suppliedTicket = String(parsed.query.ticket || "");
-  const ticketValid = suppliedTicket && wsTickets.get(suppliedTicket) > Date.now();
+  const ticketRecord = wsTickets.get(suppliedTicket);
+  const ticketValid = ticketRecord && ticketRecord.expiresAt > Date.now() && ticketRecord.role === role;
   if ((!ticketValid && suppliedToken !== token) || !["phone", "dashboard", "watch"].includes(role)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();

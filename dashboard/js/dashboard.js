@@ -1,4 +1,4 @@
-import { FriendlyError, api, generateLaptopKey, getPublicKey, signedCommand } from "./api.js";
+import { FriendlyError, api, clearCloudWebSocket, generateLaptopKey, getPublicKey, handleCloudSocketMessage, localTransportAllowed, setCloudWebSocket, signedCommand } from "./api.js";
 import { renderAudio } from "./audio.js";
 import { renderGallery } from "./gallery.js";
 import { copyCoordinates, renderLiveLocation, renderLocation, renderLocationHistory } from "./maps.js";
@@ -34,7 +34,7 @@ function bindElements() {
     "lostModeValue", "ownerValue", "studyModeValue", "maintenanceValue", "commandStatus", "lostMessage",
     "typeFilter", "dateFilter", "sortFilter", "refreshNow", "photoPanel", "audioPanel", "loadMorePhotos",
     "loadMoreAudio", "totalPhotos", "totalAudio", "storageUsed", "recoveryEvents", "debugPanel",
-    "debugOutput", "settingsDialog", "serverUrl", "phoneUrl", "tokenInput", "refreshInterval", "darkMode",
+    "debugOutput", "settingsDialog", "serverUrl", "phoneUrl", "transportMode", "tokenInput", "refreshInterval", "darkMode",
     "notificationsEnabled", "debugMode", "generateKey", "saveSettings", "publicKey", "toast",
     "locateNow", "startLiveLocation", "stopLiveLocation", "liveLocationState"
   ]) {
@@ -94,7 +94,7 @@ async function refreshAll(resetMedia = false) {
       api.latestLocation(),
       api.stats(),
       api.liveLocation(),
-      fetchPhoneStatus()
+      localTransportAllowed() ? fetchPhoneStatus() : Promise.resolve(null)
     ]);
 
     const healthData = valueOrNull(health);
@@ -263,6 +263,7 @@ async function fetchPhoneStatus() {
 function saveSettingsFromUi() {
   state.settings.serverUrl = els.serverUrl.value.trim() || "http://localhost:8787";
   state.settings.phoneUrl = els.phoneUrl.value.trim();
+  state.settings.transportMode = els.transportMode.value;
   state.settings.token = els.tokenInput.value;
   state.settings.refreshInterval = Math.max(1000, Number(els.refreshInterval.value || 3000));
   state.settings.darkMode = els.darkMode.checked;
@@ -278,6 +279,7 @@ function saveSettingsFromUi() {
 function loadSettingsIntoUi() {
   els.serverUrl.value = state.settings.serverUrl;
   els.phoneUrl.value = state.settings.phoneUrl;
+  els.transportMode.value = state.settings.transportMode || "auto";
   els.tokenInput.value = state.settings.token;
   els.refreshInterval.value = state.settings.refreshInterval;
   els.darkMode.checked = state.settings.darkMode;
@@ -308,6 +310,7 @@ function startLiveTransport() {
     if (!ticketData?.ticket) throw new Error("No WebSocket ticket");
     const endpoint = `${wsBase}/ws?role=dashboard&ticket=${encodeURIComponent(ticketData.ticket)}`;
     liveSocket = new WebSocket(endpoint);
+    setCloudWebSocket(liveSocket);
     liveSocket.addEventListener("open", () => {
       els.connectionBadge.textContent = "Recovery server online · live";
       els.connectionBadge.className = "badge good";
@@ -315,8 +318,16 @@ function startLiveTransport() {
     liveSocket.addEventListener("message", event => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (message.type === "command_ack") {
-        els.commandStatus.textContent = message.result?.ok ? "Command applied on phone" : `Command failed: ${message.result?.error || "unknown error"}`;
+      if (handleCloudSocketMessage(message)) {
+        els.commandStatus.textContent = "Command accepted by cloud transport";
+      } else if (message.type === "command_ack") {
+        const latency = message.latency || {};
+        const elapsed = latency.serverReceivedAt && latency.dashboardReceivedAckAt
+          ? ` · ${Math.max(0, latency.dashboardReceivedAckAt - latency.serverReceivedAt)} ms`
+          : "";
+        els.commandStatus.textContent = message.result?.ok
+          ? `Command applied on phone${elapsed}`
+          : `Command failed: ${message.result?.error || "unknown error"}`;
         refreshAll(false);
       } else if (message.type === "phone_presence") {
         els.commandStatus.textContent = message.online ? "Phone connected · push transport active" : "Phone offline · HTTP queue active";
@@ -331,6 +342,7 @@ function startLiveTransport() {
       }
     });
     liveSocket.addEventListener("close", () => {
+      clearCloudWebSocket(liveSocket);
       liveSocket = null;
       liveSocketRetry = setTimeout(startLiveTransport, Math.max(3000, state.settings.refreshInterval));
     });

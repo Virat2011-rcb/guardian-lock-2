@@ -1,6 +1,7 @@
 export const defaults = {
   serverUrl: localStorage.getItem("guardian_recovery_server_url") || (location.origin && location.origin !== "null" && location.protocol !== "file:" ? location.origin : "http://localhost:8787"),
   phoneUrl: localStorage.getItem("guardian_lock_phone_url") || "",
+  transportMode: localStorage.getItem("guardian_transport_mode") || "auto",
   token: localStorage.getItem("guardian_lock_upload_token") || "",
   refreshInterval: Number(localStorage.getItem("guardian_refresh_interval") || 3000),
   darkMode: localStorage.getItem("guardian_dark_mode") === "true",
@@ -19,6 +20,7 @@ export const state = {
 export function saveSettings(settings) {
   state.settings = { ...state.settings, ...settings };
   localStorage.setItem("guardian_lock_phone_url", state.settings.phoneUrl);
+  localStorage.setItem("guardian_transport_mode", state.settings.transportMode || "auto");
   localStorage.setItem("guardian_recovery_server_url", state.settings.serverUrl);
   localStorage.setItem("guardian_lock_upload_token", state.settings.token);
   localStorage.setItem("guardian_refresh_interval", String(state.settings.refreshInterval));

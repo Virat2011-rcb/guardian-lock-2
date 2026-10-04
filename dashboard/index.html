@@ -172,7 +172,14 @@
     <form method="dialog" class="settings">
       <h2>Dashboard Settings</h2>
       <label>Recovery Server URL<input id="serverUrl" placeholder="http://localhost:8787"></label>
-      <label>Phone Dashboard URL<input id="phoneUrl" placeholder="http://192.168.x.x:8765"></label>
+      <label>Transport Mode
+        <select id="transportMode">
+          <option value="auto">Auto (nearby when allowed, otherwise cloud)</option>
+          <option value="nearby">Nearby / local phone</option>
+          <option value="cloud">Cloud only (HTTPS/WSS)</option>
+        </select>
+      </label>
+      <label>Phone Dashboard URL <small>Used only for explicit nearby/local mode</small><input id="phoneUrl" placeholder="http://192.168.x.x:8765"></label>
       <label>Recovery Token<input id="tokenInput" type="password"></label>
       <label>Auto Refresh Interval (ms)<input id="refreshInterval" type="number" min="1000" step="500"></label>
       <label class="check"><input id="darkMode" type="checkbox"> Dark Mode</label>
