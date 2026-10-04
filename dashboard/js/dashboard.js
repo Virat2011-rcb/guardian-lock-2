@@ -197,6 +197,7 @@ function renderStatus(status = {}, timestamp, phone = {}) {
 }
 
 function renderStats(stats = {}) {
+  stats = stats && typeof stats === "object" ? stats : {};
   els.totalPhotos.textContent = stats.totalPhotos ?? stats.photos ?? 0;
   els.totalAudio.textContent = stats.totalAudio ?? stats.audio ?? 0;
   els.storageUsed.textContent = stats.storageUsedHuman ?? formatBytes(stats.storageUsedBytes ?? 0);
