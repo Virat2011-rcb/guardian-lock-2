@@ -186,7 +186,7 @@ function renderStatus(status = {}, timestamp, phone = {}) {
   els.studyModeValue.textContent = phone?.studyMode ?? status.studyMode ?? "Ready";
   els.maintenanceValue.textContent = phone?.maintenanceMode === undefined
     ? "Maintenance unknown"
-    : `Maintenance ${formatOnOff(phone.maintenanceMode)}`;
+    : `Maintenance ${formatOnOff(phone.maintenanceMode)} · CCTV ${formatOnOff(phone?.cctvMonitor ?? status.cctvMonitor)}`;
 }
 
 function renderStats(stats = {}) {

@@ -9,8 +9,12 @@ const root = __dirname;
 const dataRoot = process.env.GUARDIAN_DATA_DIR || path.join(root, "data");
 const uploads = path.join(dataRoot, "recover_uploads");
 const commandDir = path.join(dataRoot, "recover_commands");
+const pairingDir = path.join(dataRoot, "watch_pairings");
+const eventDir = path.join(dataRoot, "recover_events");
 fs.mkdirSync(uploads, { recursive: true });
 fs.mkdirSync(commandDir, { recursive: true });
+fs.mkdirSync(pairingDir, { recursive: true });
+fs.mkdirSync(eventDir, { recursive: true });
 
 const MIME = {
   ".html": "text/html",
@@ -25,7 +29,7 @@ const MIME = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".apk": "application/vnd.android.package-archive",
-}
+};
 
 function send(res, code, body, type = "application/json") {
   const text = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body, null, 2));
@@ -98,6 +102,84 @@ function ackCommand(id, result) {
   fs.writeFileSync(ackFile, JSON.stringify(payload, null, 2));
   fs.unlinkSync(file);
   return true;
+}
+
+function cleanupExpiredPairings() {
+  const now = Date.now();
+  for (const name of fs.readdirSync(pairingDir)) {
+    if (!/^pair_\d{7}\.json$/.test(name)) continue;
+    const file = path.join(pairingDir, name);
+    const data = runCatchingJson(file);
+    if (!data || Number(data.expiresAt || 0) < now) {
+      runCatching(() => fs.unlinkSync(file));
+    }
+  }
+}
+
+function saveWatchPairing(body) {
+  cleanupExpiredPairings();
+  const json = JSON.parse(body.toString("utf8"));
+  const code = String(json.code || "").trim();
+  const publicKey = String(json.publicKey || "").trim();
+  if (!/^\d{7}$/.test(code)) throw new Error("pairing_code_must_be_7_digits");
+  if (publicKey.length < 60) throw new Error("public_key_too_short");
+  const maxExpiry = Date.now() + 15 * 60 * 1000;
+  const expiresAt = Math.min(Number(json.expiresAt || maxExpiry), maxExpiry);
+  const file = path.join(pairingDir, `pair_${code}.json`);
+  fs.writeFileSync(file, JSON.stringify({ code, publicKey, expiresAt, createdAt: Date.now() }, null, 2));
+  return { code, expiresAt };
+}
+
+function getWatchPairing(code) {
+  cleanupExpiredPairings();
+  if (!/^\d{7}$/.test(String(code || ""))) return null;
+  const file = path.join(pairingDir, `pair_${code}.json`);
+  const data = runCatchingJson(file);
+  if (!data || Number(data.expiresAt || 0) < Date.now()) return null;
+  return data;
+}
+
+function runCatchingJson(file) {
+  try {
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function runCatching(fn) {
+  try {
+    fn();
+  } catch {
+    // best effort cleanup
+  }
+}
+
+function saveRecoveryEvent(body) {
+  const json = JSON.parse(body.toString("utf8"));
+  const type = safeName(json.type || "event");
+  const timestamp = Number(json.timestamp || Date.now());
+  const event = {
+    id: `event_${timestamp}_${type}`,
+    type,
+    detail: String(json.detail || "").slice(0, 600),
+    timestamp,
+    createdAt: Date.now(),
+    source: safeName(json.source || "phone"),
+  };
+  const file = path.join(eventDir, `${event.id}.json`);
+  fs.writeFileSync(file, JSON.stringify(event, null, 2));
+  return event;
+}
+
+function recoveryEvents(query = {}) {
+  const items = fs.readdirSync(eventDir)
+    .filter(name => /^event_\d+_[a-zA-Z0-9._-]+\.json$/.test(name))
+    .map(name => runCatchingJson(path.join(eventDir, name)))
+    .filter(Boolean)
+    .sort((a, b) => query.sort === "oldest" ? a.timestamp - b.timestamp : b.timestamp - a.timestamp);
+  return items;
 }
 
 function allUploadFiles() {
@@ -179,6 +261,9 @@ function latestStatus() {
 
 function timeline(query) {
   const events = [];
+  for (const event of recoveryEvents(query)) {
+    events.push({ ...event, label: event.type === "motion_detected" ? "Motion detected" : event.type.replace(/_/g, " ") });
+  }
   for (const item of allUploadFiles()) {
     if (isPhoto(item.name)) events.push({ ...publicMeta(item, "photo"), label: `${cameraFromName(item.name)} camera photo` });
     if (isAudio(item.name)) events.push({ ...publicMeta(item, "audio"), label: "Audio recorded" });
@@ -326,6 +411,13 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, saved: path.basename(file), bytes: body.length });
     }
 
+    if (req.method === "POST" && parsed.pathname === "/recover/event") {
+      if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
+      const body = await collect(req, 64 * 1024);
+      const event = saveRecoveryEvent(body);
+      return send(res, 200, { ok: true, event });
+    }
+
     if (req.method === "GET" && parsed.pathname === "/recover/list") {
       if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
       return send(res, 200, { ok: true, files: allUploadFiles().sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map(item => item.name) });
@@ -335,6 +427,14 @@ const server = http.createServer(async (req, res) => {
       if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
       const commands = commandFiles().slice(0, 20).map(item => JSON.parse(fs.readFileSync(item.file, "utf8")));
       return send(res, 200, { ok: true, commands });
+    }
+
+    if (req.method === "GET" && parsed.pathname.startsWith("/recover/watch/pairing/")) {
+      if (!authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
+      const code = decodeURIComponent(parsed.pathname.replace("/recover/watch/pairing/", ""));
+      const pairing = getWatchPairing(code);
+      if (!pairing) return send(res, 404, { ok: false, error: "pairing_code_not_found_or_expired" });
+      return send(res, 200, { ok: true, code: pairing.code, publicKey: pairing.publicKey, expiresAt: pairing.expiresAt });
     }
 
     if (req.method === "POST" && parsed.pathname.startsWith("/recover/commands/") && parsed.pathname.endsWith("/ack")) {
@@ -347,6 +447,12 @@ const server = http.createServer(async (req, res) => {
 
     if (parsed.pathname === "/api/health") return send(res, 200, { ok: true, serverTime: Date.now(), version: "2.0" });
     if (parsed.pathname.startsWith("/api/") && !authorized(req, parsed)) return send(res, 401, { ok: false, error: "bad_token" });
+
+    if (req.method === "POST" && parsed.pathname === "/api/watch/pairing") {
+      const body = await collect(req, 64 * 1024);
+      const pairing = saveWatchPairing(body);
+      return send(res, 200, { ok: true, ...pairing });
+    }
 
     if (req.method === "POST" && parsed.pathname === "/api/commands") {
       const body = await collect(req, 64 * 1024);
@@ -379,6 +485,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, ...paginate(items, parsed.query) });
     }
     if (parsed.pathname === "/api/timeline") return send(res, 200, { ok: true, ...timeline(parsed.query) });
+    if (parsed.pathname === "/api/events/latest") return send(res, 200, { ok: true, event: recoveryEvents(parsed.query)[0] || null });
+    if (parsed.pathname === "/api/events") return send(res, 200, { ok: true, ...paginate(recoveryEvents(parsed.query), parsed.query) });
     if (parsed.pathname === "/api/stats") return send(res, 200, { ok: true, stats: stats() });
 
     if (req.method === "GET" && serveStatic(req, res, parsed.pathname)) return;
